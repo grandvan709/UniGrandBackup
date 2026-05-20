@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local runtime
+backups/
+logs/
+.env
+config.yaml
+
+# Build / tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Repo metadata
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Docs / docker
+*.md
+LICENSE
+Dockerfile
+docker-compose.yml
+docker-compose.example.yml
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Claude
+.claude/

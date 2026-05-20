@@ -1,0 +1,33 @@
+name: Запрос функционала
+title: "[Feature] "
+description: Предложите новый функционал
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Прежде чем создавать запрос, убедитесь в следующем:
+        1. Обязательно укажите краткий и понятный заголовок, чтобы другим было проще найти ваш запрос.
+        2. Убедитесь, что похожий запрос ещё не создан в разделе [существующих](https://github.com/grandvan709/UniGrandBackup/issues?q=is%3Aissue), иначе обсудите свой вопрос там.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Описание функции
+      description: Чёткое и краткое описание предлагаемой функции
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Сценарий использования
+      description: Опишите ситуацию, в которой эта функция была бы полезна
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Возможная реализация
+      description: Если у вас есть идеи по реализации — опишите их здесь
+    validations:
+      required: false

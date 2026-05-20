@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.python-version
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local runtime artifacts (никогда не должны попадать в репо)
+backups/
+logs/
+.env
+config.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude-specific (не публикуем — внутренние настройки и инструкции)
+.claude/
+CLAUDE.md

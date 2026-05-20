@@ -1,0 +1,83 @@
+# UniGrandBackup — example config
+#
+# Любая переменная вида *_env ссылается на ИМЯ переменной из .env,
+# из которой будет прочитано реальное значение секрета.
+
+global:
+  local_storage_path: /var/backups          # внутри контейнера, монтируется томом
+  local_retention: 7                         # сколько последних архивов хранить локально per service
+  timezone: Europe/Moscow                    # для cron-расписаний и timestamp-ов в именах файлов
+  log_level: INFO                            # DEBUG | INFO | WARNING | ERROR
+
+services:
+
+  # ---------- Bedolaga: бот + postgres + redis + файлы ----------
+  - name: bedolaga
+    enabled: true
+    schedule: "0 3 * * *"                    # каждый день в 03:00 (по global.timezone)
+    paths:
+      - /opt/remnawave-bedolaga-telegram-bot/.env
+      - /opt/remnawave-bedolaga-telegram-bot/data
+    databases:
+      - kind: postgres
+        host: remnawave_bot_db               # имя docker-контейнера (резолвится в bot_network)
+        port: 5432
+        user: remnawave_user
+        password_env: BEDOLAGA_DB_PASSWORD   # значение в .env: BEDOLAGA_DB_PASSWORD=...
+        database: remnawave_bot
+        format: custom                       # pg_dump -Fc (binary, сжатый)
+    local_retention: 7                       # переопределяет global.local_retention
+    telegram:
+      bot_token_env: BACKUP_BOT_TOKEN
+      chat_id: -1003859501094                # супергруппа админа
+      thread_id: 42                          # топик "Backups Bedolaga"
+      send_last_only: true
+      send_summary: true
+
+  # ---------- n8n: postgres + папка data + .env ----------
+  - name: n8n
+    enabled: true
+    schedule: "30 3 * * *"                   # 03:30 (через 30 мин после Bedolaga)
+    paths:
+      - /opt/automations/n8n/.env
+      - /opt/automations/n8n/data
+    databases:
+      - kind: postgres
+        host: automations-db                 # docker-контейнер в сети 'automations'
+        port: 5432
+        user: n8n
+        password_env: N8N_DB_PASSWORD
+        database: n8n
+        format: custom
+    telegram:
+      bot_token_env: BACKUP_BOT_TOKEN
+      chat_id: -1003859501094
+      thread_id: 43                          # топик "Backups n8n"
+
+  # ---------- claude-bridge: только OAuth-кредитки и .env (без БД) ----------
+  - name: claude-bridge
+    enabled: true
+    schedule: "0 4 * * *"                    # 04:00
+    paths:
+      - /opt/automations/claude-bridge/.env
+      - /opt/automations/claude-bridge/claude-home
+    # databases: []   — нет БД, секцию опускаем целиком
+    local_retention: 14                      # OAuth-сессии редкие, можно хранить дольше
+    telegram:
+      bot_token_env: BACKUP_BOT_TOKEN
+      chat_id: -1003859501094
+      thread_id: 44
+
+  # ---------- Пример с SQLite (если когда-то понадобится) ----------
+  # - name: legacy-sqlite-app
+  #   enabled: false
+  #   schedule: "0 5 * * 0"                  # раз в неделю в воскресенье 05:00
+  #   paths:
+  #     - /opt/legacy/uploads
+  #   databases:
+  #     - kind: sqlite
+  #       path: /opt/legacy/data/app.db
+  #   telegram:
+  #     bot_token_env: BACKUP_BOT_TOKEN
+  #     chat_id: -1003859501094
+  #     thread_id: 45

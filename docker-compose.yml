@@ -1,0 +1,36 @@
+services:
+  unigrandbackup:
+    container_name: unigrandbackup
+    hostname: unigrandbackup
+    image: grandvan/unigrandbackup:latest
+    restart: always
+    volumes:
+      # Конфиг и .env с секретами
+      - ./config.yaml:/app/config.yaml:ro
+      - ./.env:/app/.env:ro
+
+      # Локальное хранилище бэкапов (ротация N последних)
+      - /var/backups/unigrandbackup:/var/backups
+
+      # Логи (опционально, можно убрать если хватает docker logs)
+      - ./logs:/app/logs
+
+      # Папки/файлы для бэкапа — read-only монтируются под теми же путями,
+      # какие указаны в config.yaml services[].paths
+      - /opt:/opt:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      # Подключаем сети, в которых лежат бэкапаемые БД (если они в docker).
+      # Имена/наличие — под конкретный сервер. Закомментируй то, чего нет.
+      - bot_network          # Bedolaga postgres/redis
+      - automations          # n8n automations-db
+      - remnawave-network    # на случай если что-то бэкапим из remnawave-стека
+
+networks:
+  bot_network:
+    external: true
+  automations:
+    external: true
+  remnawave-network:
+    external: true

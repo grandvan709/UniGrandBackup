@@ -15,6 +15,7 @@ class GlobalConfig(BaseModel):
     local_retention: int = Field(default=7, ge=1)
     timezone: str = "UTC"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    language: Literal["ru", "en"] = "ru"
 
 
 class PostgresDB(BaseModel):

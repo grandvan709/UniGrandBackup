@@ -4,6 +4,7 @@ Modes:
   daemon  (default): start APScheduler, run cron-based jobs forever
   run     <service>: run one service immediately and exit
   list:              print loaded services and exit
+  restore <archive>: restore a backup archive (files + DB)
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import os
 import signal
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import structlog
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -21,27 +23,83 @@ from dotenv import load_dotenv
 
 from . import __version__
 from .config import Config, ServiceConfig, load_config
+from .i18n import t_ui
 from .runner import BackupRunner
 from .utils import setup_logging
 
 log = structlog.get_logger(__name__)
 
 
+# ─── pretty banner (printed before structlog logs start) ──────────────────────
+_ANSI_RESET = "\033[0m"
+_ANSI_BOLD = "\033[1m"
+_ANSI_CYAN = "\033[36m"
+_ANSI_GRAY = "\033[90m"
+_ANSI_GREEN = "\033[32m"
+_ANSI_DIM = "\033[2m"
+_BANNER_WIDTH = 64
+
+
+def _use_color() -> bool:
+    return os.environ.get("NO_COLOR") not in ("1", "true", "yes")
+
+
+def _c(text: str, color: str) -> str:
+    return f"{color}{text}{_ANSI_RESET}" if _use_color() else text
+
+
 def _print_banner(config: Config) -> None:
+    lang = config.global_.language
     enabled = [s for s in config.services if s.enabled]
-    print(f"UniGrandBackup v{__version__}")
-    print(f"Timezone: {config.global_.timezone}")
-    print(f"Storage:  {config.global_.local_storage_path} (retention: {config.global_.local_retention})")
-    print(f"Services configured: {len(config.services)}, enabled: {len(enabled)}")
+    bar = "━" * _BANNER_WIDTH
+
+    title = t_ui(lang, "banner_title", version=__version__)
+    print(_c(bar, _ANSI_CYAN))
+    print(_c(f"  🗄  {title}", _ANSI_BOLD + _ANSI_CYAN))
+    print(_c(bar, _ANSI_CYAN))
+    print(
+        f"  {t_ui(lang, 'banner_tz'):<10} "
+        f"{_c(config.global_.timezone, _ANSI_GREEN)}"
+    )
+    print(
+        f"  {t_ui(lang, 'banner_storage'):<10} "
+        f"{_c(str(config.global_.local_storage_path), _ANSI_GREEN)} "
+        f"{_c('(' + t_ui(lang, 'banner_retention') + '=' + str(config.global_.local_retention) + ')', _ANSI_DIM)}"
+    )
+    print(
+        f"  {t_ui(lang, 'banner_lang'):<10} "
+        f"{_c(lang.upper(), _ANSI_GREEN)}"
+    )
+    print(
+        f"  {_c(t_ui(lang, 'banner_services_total', total=len(config.services), enabled=len(enabled)), _ANSI_BOLD)}"
+    )
     for s in config.services:
-        marker = "✓" if s.enabled else "·"
-        print(f"  {marker} {s.name:24} schedule={s.schedule!r:24} retention={s.local_retention or config.global_.local_retention}")
+        marker = _c("✓", _ANSI_GREEN) if s.enabled else _c("·", _ANSI_GRAY)
+        state = t_ui(lang, "banner_service_enabled") if s.enabled else t_ui(lang, "banner_service_disabled")
+        retention = s.local_retention or config.global_.local_retention
+        line = (
+            f"    {marker} "
+            f"{s.name:<22} "
+            f"{_c('schedule', _ANSI_DIM)}={_c(repr(s.schedule), _ANSI_GREEN)} "
+            f"{_c('retention', _ANSI_DIM)}={retention} "
+            f"{_c('(' + state + ')', _ANSI_DIM)}"
+        )
+        print(line)
+    print(_c(bar, _ANSI_CYAN))
 
 
 def _run_one(config: Config, name: str) -> int:
     service = next((s for s in config.services if s.name == name), None)
     if service is None:
-        log.error("service_not_found", name=name, available=[s.name for s in config.services])
+        print(
+            t_ui(
+                config.global_.language,
+                "cli_service_not_found",
+                name=name,
+                available=", ".join(s.name for s in config.services),
+            ),
+            file=sys.stderr,
+        )
         return 2
     if not service.enabled:
         log.warning("service_disabled", name=name)
@@ -63,14 +121,18 @@ def _make_job(config: Config, service: ServiceConfig):
 
 
 def _run_daemon(config: Config) -> int:
-    scheduler = BlockingScheduler(timezone=config.global_.timezone)
+    try:
+        tz = ZoneInfo(config.global_.timezone)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    scheduler = BlockingScheduler(timezone=tz)
 
     for service in config.services:
         if not service.enabled:
             log.info("service_skipped_disabled", name=service.name)
             continue
         try:
-            trigger = CronTrigger.from_crontab(service.schedule, timezone=config.global_.timezone)
+            trigger = CronTrigger.from_crontab(service.schedule, timezone=tz)
         except Exception as e:
             log.error(
                 "invalid_cron_schedule",
@@ -109,6 +171,24 @@ def _run_daemon(config: Config) -> int:
     return 0
 
 
+def _run_restore(config: Config, archive: Path, force: bool, no_compose: bool) -> int:
+    """Delegated to restore.py so that the import is lazy."""
+    from .restore import restore_archive
+
+    if not archive.is_file():
+        print(
+            t_ui(config.global_.language, "cli_archive_not_found", path=str(archive)),
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        restore_archive(config, archive, force=force, run_compose=not no_compose)
+        return 0
+    except Exception as e:
+        log.error("restore_failed", archive=str(archive), error=str(e), exc_info=True)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="unigrandbackup")
     parser.add_argument(
@@ -123,6 +203,19 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("name", help="service name from config.yaml")
     sub.add_parser("list", help="print loaded services and exit")
 
+    p_restore = sub.add_parser("restore", help="restore a backup archive")
+    p_restore.add_argument("archive", type=Path, help="path to .tar.gz archive")
+    p_restore.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing files/database without confirmation",
+    )
+    p_restore.add_argument(
+        "--no-compose",
+        action="store_true",
+        help="don't auto-run 'docker compose up' even if compose file is in archive",
+    )
+
     args = parser.parse_args(argv)
     cmd = args.cmd or "daemon"
 
@@ -131,16 +224,25 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
     except Exception as e:
+        # Logging not yet configured — print plain to stderr.
         print(f"FATAL: failed to load config {args.config}: {e}", file=sys.stderr)
         return 4
 
-    setup_logging(config.global_.log_level)
+    setup_logging(
+        level=config.global_.log_level,
+        tz_name=config.global_.timezone,
+        lang=config.global_.language,
+    )
 
     if cmd == "list":
         _print_banner(config)
         return 0
     if cmd == "run":
+        _print_banner(config)
         return _run_one(config, args.name)
+    if cmd == "restore":
+        _print_banner(config)
+        return _run_restore(config, args.archive, force=args.force, no_compose=args.no_compose)
     _print_banner(config)
     return _run_daemon(config)
 

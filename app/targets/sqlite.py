@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import shutil
 from pathlib import Path
+from typing import TypedDict
 
 import structlog
 
@@ -14,7 +15,13 @@ from ..utils import run_subprocess
 log = structlog.get_logger(__name__)
 
 
-def dump_sqlite(db: SQLiteDB, staging_dir: Path) -> Path:
+class SqliteDumpEntry(TypedDict):
+    kind: str           # "sqlite"
+    source_path: str    # original DB path on host
+    archive_path: str   # path inside archive (e.g. "databases/app.sql.gz")
+
+
+def dump_sqlite(db: SQLiteDB, staging_dir: Path) -> SqliteDumpEntry:
     """Run `sqlite3 <path> .dump` and gzip the output.
 
     Result: staging_dir/databases/<db-basename>.sql.gz
@@ -54,4 +61,8 @@ def dump_sqlite(db: SQLiteDB, staging_dir: Path) -> Path:
 
     size = gz_path.stat().st_size
     log.info("sqlite_dump_done", path=str(db.path), size_bytes=size, dest=str(gz_path))
-    return gz_path
+    return {
+        "kind": "sqlite",
+        "source_path": str(db.path),
+        "archive_path": f"databases/{gz_path.name}",
+    }

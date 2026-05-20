@@ -13,7 +13,7 @@ import structlog
 
 from . import __version__
 from .config import Config, PostgresDB, ServiceConfig, SQLiteDB
-from .i18n import t_tg
+from .i18n import t_count, t_tg
 from .storage import LocalStorage, TelegramStorage
 from .targets import backup_paths, dump_postgres, dump_sqlite
 from .utils import ensure_dir, human_size, make_tarball, timestamp_for_filename
@@ -63,7 +63,11 @@ class BackupRunner:
                 # 1. Paths (files / folders)
                 if self.service.paths:
                     try:
-                        files_meta = list(backup_paths(self.service.paths, staging_dir))
+                        files_meta = list(backup_paths(
+                            self.service.paths,
+                            staging_dir,
+                            exclude_patterns=self.service.paths_exclude,
+                        ))
                     except Exception as e:
                         errors.append(f"files: {e}")
                         log.error("files_step_failed", error=str(e))
@@ -123,7 +127,7 @@ class BackupRunner:
                     service=self.service.name,
                     archive=saved.name,
                     duration_s=round(duration_s, 2),
-                    errors=len(errors),
+                    errors_str=t_count(self.lang, "errors", len(errors)),
                 )
                 return saved
 
@@ -223,7 +227,7 @@ class BackupRunner:
 
         if errors:
             status_icon = "⚠️"
-            status_text = t_tg(self.lang, "status_warn", count=len(errors))
+            status_text = t_count(self.lang, "errors", len(errors))
         else:
             status_icon = "✅"
             status_text = t_tg(self.lang, "status_ok")
@@ -242,7 +246,7 @@ class BackupRunner:
         if files_meta:
             contents_lines.append(
                 f"   • 📁 <b>{t_tg(self.lang, 'files')}:</b> "
-                f"{t_tg(self.lang, 'files_count', count=len(files_meta))}"
+                f"{t_count(self.lang, 'paths', len(files_meta))}"
             )
         for db in db_meta:
             if db.get("kind") == "postgres":

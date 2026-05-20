@@ -17,8 +17,13 @@ services:
     enabled: true
     schedule: "0 3 * * *"                    # каждый день в 03:00 (по global.timezone)
     paths:
-      - /opt/myapp/.env
-      - /opt/myapp/data
+      - /opt/myapp                           # целиком директория сервиса
+    paths_exclude:                           # glob-паттерны, относительные к каждому пути из paths
+      - "**/.git"                            # не тащим историю репозитория
+      - "**/node_modules"                    # JS-зависимости
+      - "**/__pycache__"                     # Python-кэш
+      - "**/backups"                         # старые архивы (рекурсия на нас же)
+      - "**/*.log"                           # логи приложений
     databases:
       - kind: postgres
         host: myapp-db                       # имя docker-контейнера (резолвится в myapp_network)

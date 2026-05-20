@@ -63,7 +63,11 @@ class BackupRunner:
                 # 1. Paths (files / folders)
                 if self.service.paths:
                     try:
-                        files_meta = list(backup_paths(self.service.paths, staging_dir))
+                        files_meta = list(backup_paths(
+                            self.service.paths,
+                            staging_dir,
+                            exclude_patterns=self.service.paths_exclude,
+                        ))
                     except Exception as e:
                         errors.append(f"files: {e}")
                         log.error("files_step_failed", error=str(e))

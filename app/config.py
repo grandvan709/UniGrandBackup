@@ -65,6 +65,7 @@ class ServiceConfig(BaseModel):
     enabled: bool = True
     schedule: str  # cron expression — APScheduler CronTrigger.from_crontab
     paths: list[Path] = Field(default_factory=list)
+    paths_exclude: list[str] = Field(default_factory=list)
     databases: list[Database] = Field(default_factory=list)
     local_retention: int | None = None  # переопределяет global, если задано
     telegram: TelegramConfig | None = None

@@ -20,6 +20,7 @@
 - ✅ **Telegram** — последний созданный бэкап отправляется в указанный chat/топик (`message_thread_id` поддерживается)
 - ✅ **Per-service настройки** Telegram-бота: разные сервисы могут писать в разные топики и даже использовать разных ботов
 - ✅ **Cron-формат** расписаний через APScheduler
+- ✅ **`paths_exclude`** — glob-паттерны (с поддержкой `**`) для исключения подпапок/файлов: `**/.git`, `**/node_modules`, `**/__pycache__`, `**/backups`
 - ✅ **Восстановление одной командой** — `restore <archive>` распаковывает файлы, поднимает docker compose и заливает дамп БД. Формат архива самодостаточен (есть `manifest.json` со всей метой)
 - ✅ **Локализация RU / EN** для логов и Telegram-сообщений (`global.language`)
 - ✅ **Читаемые цветные логи** в `docker logs` (плюс опциональный JSON-режим через `LOG_FORMAT=json`)
@@ -29,9 +30,14 @@
 
 ## 📋 Требования
 
-- Linux сервер с Docker + docker compose v2
-- Доступ к docker-сетям бэкапаемых сервисов (для подключения к их Postgres-контейнерам)
+- Linux-сервер с Docker + docker compose v2 (только для запуска **самого** UniGrandBackup)
 - Telegram-бот с доступом к админ-чату / топику (для отправки артефактов)
+- Доступ из контейнера UniGrandBackup до того, что бэкапится:
+  - **Файлы** — bind-mount нужных директорий внутрь контейнера (например `/opt:/opt:ro`)
+  - **Postgres** — сетевой доступ до `host:port` (docker-сеть с контейнером БД / `host.docker.internal` / прямой IP/DNS)
+  - **SQLite** — путь к `.db`-файлу, доступный внутри контейнера через volume
+
+> 💡 **Бэкапаемые сервисы НЕ обязаны быть в Docker.** Можно бэкапить bare-metal Postgres (через host-IP), SQLite-файлы любого приложения, systemd-сервисы и т. п. Docker-специфика только в команде `restore` — для не-докеризованного сервиса используется флаг `--no-compose`, дальше всё работает.
 
 ---
 
@@ -133,6 +139,7 @@ services:
 | `enabled` | bool | нет | `true` по умолчанию. `false` = пропустить при загрузке расписания |
 | `schedule` | cron | да | Cron-выражение в формате APScheduler (`min hour day month dow`) |
 | `paths` | list of paths | нет | Файлы/папки для бэкапа (упакуются tar внутрь одного архива) |
+| `paths_exclude` | list of glob | нет | Glob-паттерны (с поддержкой `**`), исключаемые из `paths`. Пути сопоставляются **относительно** каждого корня в `paths`. Примеры: `**/.git`, `**/node_modules`, `**/__pycache__`, `**/backups`, `**/*.log` |
 | `databases` | list | нет | Базы данных (см. ниже) |
 | `local_retention` | int | нет | Переопределяет `global.local_retention` |
 | `telegram` | object | нет | Отправка в Telegram (см. ниже) |

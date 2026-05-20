@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 
 from . import __version__
 from .config import Config, ServiceConfig, load_config
-from .i18n import t_ui
+from .i18n import t_count, t_ui
 from .runner import BackupRunner
 from .utils import setup_logging
 
@@ -163,7 +163,10 @@ def _run_daemon(config: Config) -> int:
     signal.signal(signal.SIGTERM, _on_stop)
     signal.signal(signal.SIGINT, _on_stop)
 
-    log.info("scheduler_starting", services=len(scheduler.get_jobs()))
+    log.info(
+        "scheduler_starting",
+        tasks_str=t_count(config.global_.language, "tasks", len(scheduler.get_jobs())),
+    )
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

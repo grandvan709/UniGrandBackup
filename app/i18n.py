@@ -22,8 +22,8 @@ LOG_MESSAGES: dict[str, dict[Lang, str]] = {
         "en": "Service '{name}' skipped (disabled)",
     },
     "scheduler_starting": {
-        "ru": "Планировщик запущен — {services} задач(и) в очереди",
-        "en": "Scheduler started — {services} task(s) queued",
+        "ru": "Планировщик запущен — {tasks_str} в очереди",
+        "en": "Scheduler started — {tasks_str} queued",
     },
     "shutdown_requested": {
         "ru": "Получен сигнал остановки ({signal})",
@@ -39,8 +39,8 @@ LOG_MESSAGES: dict[str, dict[Lang, str]] = {
         "en": "Starting backup: '{service}'",
     },
     "backup_done": {
-        "ru": "Бэкап готов: '{service}' → {archive} (за {duration_s}с, ошибок: {errors})",
-        "en": "Backup done: '{service}' → {archive} (took {duration_s}s, errors: {errors})",
+        "ru": "Бэкап готов: '{service}' → {archive} (за {duration_s}с, {errors_str})",
+        "en": "Backup done: '{service}' → {archive} (took {duration_s}s, {errors_str})",
     },
     "backup_failed": {
         "ru": "Бэкап провален: '{service}' — {error}",
@@ -208,14 +208,12 @@ TG_MESSAGES: dict[str, dict[Lang, str]] = {
     "title": {"ru": "UniGrandBackup", "en": "UniGrandBackup"},
     "service": {"ru": "Сервис", "en": "Service"},
     "status_ok": {"ru": "OK", "en": "OK"},
-    "status_warn": {"ru": "{count} ошибок", "en": "{count} errors"},
     "status": {"ru": "Статус", "en": "Status"},
     "time": {"ru": "Время", "en": "Time"},
     "duration": {"ru": "Длится", "en": "Duration"},
     "size": {"ru": "Размер", "en": "Size"},
     "contents": {"ru": "Содержимое", "en": "Contents"},
     "files": {"ru": "Файлы", "en": "Files"},
-    "files_count": {"ru": "{count} путь(ей)", "en": "{count} path(s)"},
     "postgres": {"ru": "PostgreSQL", "en": "PostgreSQL"},
     "sqlite": {"ru": "SQLite", "en": "SQLite"},
     "errors_label": {"ru": "Ошибки", "en": "Errors"},
@@ -299,3 +297,58 @@ def t_ui(lang: Lang, key: str, **kwargs) -> str:
         return template.format(**kwargs)
     except (KeyError, IndexError):
         return template
+
+
+# ─── Pluralization ────────────────────────────────────────────────────────────
+#
+# Russian has three plural forms (one / few / many) selected by mod-10/mod-100
+# rules. English just has singular/plural.
+
+# (singular, few, many) — for Russian
+RU_PLURALS: dict[str, tuple[str, str, str]] = {
+    "paths": ("путь", "пути", "путей"),
+    "errors": ("ошибка", "ошибки", "ошибок"),
+    "tasks": ("задача", "задачи", "задач"),
+}
+
+# (singular, plural) — for English
+EN_PLURALS: dict[str, tuple[str, str]] = {
+    "paths": ("path", "paths"),
+    "errors": ("error", "errors"),
+    "tasks": ("task", "tasks"),
+}
+
+
+def _ru_plural_form(n: int, forms: tuple[str, str, str]) -> str:
+    """Pick the right Russian plural form for n (one / few / many)."""
+    n = abs(int(n))
+    mod100 = n % 100
+    mod10 = n % 10
+    if mod10 == 1 and mod100 != 11:
+        return forms[0]
+    if 2 <= mod10 <= 4 and not (12 <= mod100 <= 14):
+        return forms[1]
+    return forms[2]
+
+
+def t_count(lang: Lang, key: str, n: int) -> str:
+    """Render '<n> <noun>' with proper plural form for the language.
+
+    Examples:
+        t_count('ru', 'paths',  1) → '1 путь'
+        t_count('ru', 'paths',  2) → '2 пути'
+        t_count('ru', 'paths',  5) → '5 путей'
+        t_count('ru', 'errors', 0) → '0 ошибок'
+        t_count('en', 'paths',  1) → '1 path'
+        t_count('en', 'paths',  2) → '2 paths'
+
+    If the key is unknown, returns just the number as a string.
+    """
+    if lang == "ru":
+        forms_ru = RU_PLURALS.get(key)
+        if forms_ru is not None:
+            return f"{n} {_ru_plural_form(n, forms_ru)}"
+    forms_en = EN_PLURALS.get(key)
+    if forms_en is not None:
+        return f"{n} {forms_en[0] if abs(int(n)) == 1 else forms_en[1]}"
+    return str(n)

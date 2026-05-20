@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import structlog
@@ -23,10 +24,15 @@ class LocalStorage:
         self.dir = self.root / service_name
 
     def save(self, src: Path) -> Path:
-        """Move src into the service directory."""
+        """Move src into the service directory.
+
+        Uses shutil.move() instead of Path.replace() so that the move works
+        across filesystem boundaries (e.g. /tmp tmpfs → /var/backups volume mount
+        inside Docker — pure os.rename() fails with EXDEV / 'Invalid cross-device link').
+        """
         ensure_dir(self.dir)
         dest = self.dir / src.name
-        src.replace(dest)
+        shutil.move(str(src), str(dest))
         log.info(
             "local_saved",
             service=self.service_name,

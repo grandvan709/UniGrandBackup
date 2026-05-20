@@ -21,6 +21,13 @@ def setup_logging(level: str = "INFO") -> None:
         stream=sys.stdout,
         level=level,
     )
+    # Tone down chatty 3rd-party loggers — they emit DEBUG/INFO lines that
+    # don't follow our JSON format and, worse, httpx writes the full request
+    # URL (which contains the Telegram bot token!). Bumping them to WARNING
+    # keeps real errors visible but hides routine request-success noise.
+    for noisy in ("httpx", "httpcore", "apscheduler", "apscheduler.scheduler", "apscheduler.executors.default"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,

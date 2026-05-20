@@ -1,4 +1,5 @@
 services:
+  # ─── Daemon: ежедневные плановые бэкапы ─────────────────────────────────────
   unigrandbackup:
     container_name: unigrandbackup
     hostname: unigrandbackup
@@ -22,15 +23,31 @@ services:
       - PYTHONUNBUFFERED=1
     networks:
       # Подключаем сети, в которых лежат бэкапаемые БД (если они в docker).
-      # Имена/наличие — под конкретный сервер. Закомментируй то, чего нет.
-      - bot_network          # Bedolaga postgres/redis
-      - automations          # n8n automations-db
-      - remnawave-network    # на случай если что-то бэкапим из remnawave-стека
+      # Имена/наличие — под конкретный сервер. Подставь свои или убери секцию,
+      # если все БД доступны по host-IP/публичному адресу.
+      - myapp_network
+
+  # ─── Restore: одноразовый запуск с RW /opt + docker.sock ────────────────────
+  # Используется по требованию (НЕ автозапуск). Пример:
+  #   docker compose --profile restore run --rm unigrandbackup-restore \
+  #       /var/backups/unigrandbackup/myapp/myapp-20260520-030000.tar.gz --force
+  unigrandbackup-restore:
+    profiles: ["restore"]
+    image: grandvan/unigrandbackup:latest
+    entrypoint: ["python", "-m", "app.main", "restore"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./.env:/app/.env:ro
+      - /var/backups/unigrandbackup:/var/backups
+      # /opt смонтирован как RW — restore должен иметь возможность писать туда
+      - /opt:/opt:rw
+      # docker.sock — чтобы restore мог поднять docker compose других сервисов
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - myapp_network
 
 networks:
-  bot_network:
-    external: true
-  automations:
-    external: true
-  remnawave-network:
+  myapp_network:
     external: true

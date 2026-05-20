@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypedDict
 
 import structlog
 
@@ -12,7 +13,18 @@ from ..utils import run_subprocess
 log = structlog.get_logger(__name__)
 
 
-def dump_postgres(db: PostgresDB, staging_dir: Path) -> Path:
+class PostgresDumpEntry(TypedDict):
+    kind: str           # "postgres"
+    host: str
+    port: int
+    user: str
+    database: str
+    format: str         # "custom" | "plain"
+    password_env: str
+    archive_path: str   # path inside archive (e.g. "databases/myapp.dump")
+
+
+def dump_postgres(db: PostgresDB, staging_dir: Path) -> PostgresDumpEntry:
     """Run pg_dump and write the dump into staging_dir/databases/<db>.dump.
 
     For format=custom — produces compressed binary dump (-Fc), restore via pg_restore.
@@ -71,4 +83,13 @@ def dump_postgres(db: PostgresDB, staging_dir: Path) -> Path:
         size_bytes=size,
         dest=str(dest),
     )
-    return dest
+    return {
+        "kind": "postgres",
+        "host": db.host,
+        "port": db.port,
+        "user": db.user,
+        "database": db.database,
+        "format": db.format,
+        "password_env": db.password_env,
+        "archive_path": f"databases/{dest.name}",
+    }

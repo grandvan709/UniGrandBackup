@@ -3,7 +3,7 @@
 > Универсальный Docker-контейнер для регулярного бэкапа любого количества сервисов на одном Linux-сервере. Файлы + базы данных → локальная ротация N последних копий + автоматическая отправка свежей копии в Telegram-топик.
 
 <p align=center>
-Создан как замена встроенным «однострочным» бэкапам отдельных сервисов (Bedolaga, n8n и т. п.):
+Создан как замена встроенным «однострочным» бэкапам отдельных сервисов:
 вместо <b>N разных механизмов</b> с разной судьбой и форматами — <b>один контейнер</b>, описывающий все сервисы в одном <code>config.yaml</code>,
 с предсказуемым форматом архива, прозрачной ротацией и доставкой в Telegram.
 </p>
@@ -20,7 +20,9 @@
 - ✅ **Telegram** — последний созданный бэкап отправляется в указанный chat/топик (`message_thread_id` поддерживается)
 - ✅ **Per-service настройки** Telegram-бота: разные сервисы могут писать в разные топики и даже использовать разных ботов
 - ✅ **Cron-формат** расписаний через APScheduler
-- ✅ **Структурированные JSON-логи** через structlog
+- ✅ **Восстановление одной командой** — `restore <archive>` распаковывает файлы, поднимает docker compose и заливает дамп БД. Формат архива самодостаточен (есть `manifest.json` со всей метой)
+- ✅ **Локализация RU / EN** для логов и Telegram-сообщений (`global.language`)
+- ✅ **Читаемые цветные логи** в `docker logs` (плюс опциональный JSON-режим через `LOG_FORMAT=json`)
 - ✅ **Запуск разовый или daemon** — можно поднять как фоновый сервис или вызывать руками через `run <service>`
 
 ---
@@ -91,24 +93,25 @@ global:
   local_retention: 7
   timezone: Europe/Moscow
   log_level: INFO
+  language: ru                 # ru | en — язык логов и Telegram-сообщений
 
 services:
-  - name: bedolaga
+  - name: myapp
     enabled: true
     schedule: "0 3 * * *"
     paths:
-      - /opt/remnawave-bedolaga-telegram-bot/data
+      - /opt/myapp/data
     databases:
       - kind: postgres
-        host: remnawave_bot_db
+        host: myapp-db
         port: 5432
-        user: remnawave_user
-        password_env: BEDOLAGA_DB_PASSWORD
-        database: remnawave_bot
+        user: myapp_user
+        password_env: MYAPP_DB_PASSWORD
+        database: myapp
         format: custom
     telegram:
       bot_token_env: BACKUP_BOT_TOKEN
-      chat_id: -1003859501094
+      chat_id: -1001234567890
       thread_id: 42
 ```
 
@@ -118,8 +121,9 @@ services:
 |:----:|:----:|:----:|:---|
 | `local_storage_path` | path | `/var/backups` | Базовая директория для локальных архивов |
 | `local_retention` | int | `7` | Сколько последних архивов хранить на сервис (можно переопределить) |
-| `timezone` | str | `UTC` | IANA-таймзона для cron-расписаний и timestamp-ов в именах файлов |
+| `timezone` | str | `UTC` | IANA-таймзона для cron-расписаний и timestamp-ов в именах файлов и логов |
 | `log_level` | str | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `language` | str | `ru` | Язык логов и Telegram-сообщений (`ru` / `en`) |
 
 ### Сервис (`services:` — массив, по элементу на сервис)
 
@@ -139,11 +143,11 @@ services:
 
 ```yaml
 - kind: postgres
-  host: remnawave_bot_db    # имя docker-контейнера или хост
+  host: myapp-db            # имя docker-контейнера или хост
   port: 5432
-  user: remnawave_user
-  password_env: BEDOLAGA_DB_PASSWORD   # имя env-переменной из .env
-  database: remnawave_bot
+  user: myapp_user
+  password_env: MYAPP_DB_PASSWORD     # имя env-переменной из .env
+  database: myapp
   format: custom            # 'custom' (рек.) или 'plain'
 ```
 
@@ -159,7 +163,7 @@ services:
 ```yaml
 telegram:
   bot_token_env: BACKUP_BOT_TOKEN   # имя env-переменной с токеном @BotFather
-  chat_id: -1003859501094           # ID чата/группы (для топика — ID супергруппы)
+  chat_id: -1001234567890           # ID чата/группы (для топика — ID супергруппы)
   thread_id: 42                     # ID топика (опционально, для форумов)
   send_last_only: true              # отправлять только самый свежий архив (а не все)
   send_summary: true                # при ошибке отправки документа — слать текстовый алерт
@@ -169,8 +173,7 @@ telegram:
 
 ```ini
 BACKUP_BOT_TOKEN=123456789:AAH...    # токен Telegram-бота от @BotFather
-BEDOLAGA_DB_PASSWORD=...             # пароль Postgres для Bedolaga
-N8N_DB_PASSWORD=...                  # пароль Postgres для n8n
+MYAPP_DB_PASSWORD=...                # пароль Postgres для myapp
 ```
 
 ⚠️ `.env` ОБЯЗАТЕЛЬНО в `.gitignore` и `chmod 600`. Имена переменных в `config.yaml` указываются как `*_env: NAME`, а сами значения — только в `.env`.
@@ -183,9 +186,7 @@ N8N_DB_PASSWORD=...                  # пароль Postgres для n8n
 
 ```yaml
 networks:
-  bot_network:
-    external: true
-  automations:
+  myapp_network:
     external: true
 ```
 
@@ -209,7 +210,7 @@ sudo docker compose down
 sudo docker compose pull && sudo docker compose up -d && sudo docker compose logs -f -t
 
 # Разовый бэкап одного сервиса (вне расписания, для проверки)
-sudo docker compose exec unigrandbackup python -m app.main run bedolaga
+sudo docker compose exec unigrandbackup python -m app.main run myapp
 
 # Показать список загруженных сервисов
 sudo docker compose exec unigrandbackup python -m app.main list
@@ -223,28 +224,28 @@ sudo docker compose exec unigrandbackup python -m app.main list
 
 ```
 /var/backups/unigrandbackup/
-├── bedolaga/
-│   ├── bedolaga-20260520-030000.tar.gz   # сегодня
-│   ├── bedolaga-20260519-030000.tar.gz
+├── myapp/
+│   ├── myapp-20260520-030000.tar.gz       # сегодня
+│   ├── myapp-20260519-030000.tar.gz
 │   └── ...                                # хранится N=local_retention копий
-├── n8n/
-│   ├── n8n-20260520-033000.tar.gz
-│   └── ...
-└── claude-bridge/
+└── filestore/
+    ├── filestore-20260520-033000.tar.gz
     └── ...
 ```
 
 Внутри одного `<service>-<YYYYMMDD-HHMMSS>.tar.gz`:
 
 ```
-bedolaga-20260520-030000/
+myapp-20260520-030000/
+├── manifest.json              # метаданные бэкапа (формат, сервис, содержимое)
 ├── files/
 │   ├── .env
 │   └── data/...
 └── databases/
-    └── remnawave_bot.dump
+    └── myapp.dump
 ```
 
+`manifest.json` — описание содержимого, нужен для восстановления через `app.main restore`.
 `databases/*.dump` — это `pg_dump -Fc` (восстановить через `pg_restore`).
 `databases/*.sql.gz` — это gzipped `sqlite3 .dump` (восстановить через `gunzip | sqlite3 newdb.sqlite`).
 
@@ -253,14 +254,20 @@ bedolaga-20260520-030000/
 ## 💬 Пример Telegram-сообщения
 
 ```
-UniGrandBackup
-Сервис: bedolaga
-Статус: ✅ OK
-Время: 2026-05-20 03:00:01 MSK
-Размер: 12.4 MB
+🗄 UniGrandBackup
+━━━━━━━━━━━━━━━━━━━━
+📦 Сервис: myapp
+✅ Статус: OK
+🕐 Время:  2026-05-20 03:00:01 MSK
+⏱ Длится:  12.4 с
+📊 Размер: 12.4 MB
+
+📥 Содержимое:
+   • 📁 Файлы: 2 пути
+   • 🐘 PostgreSQL: myapp
 ```
 
-Сам файл `bedolaga-20260520-030000.tar.gz` приходит как `document` в тот же топик.
+Сам файл `myapp-20260520-030000.tar.gz` приходит как `document` в тот же топик.
 
 ---
 
@@ -279,19 +286,60 @@ sudo docker compose up -d && sudo docker compose logs -f -t
 
 ## 🔄 Восстановление
 
+UniGrandBackup умеет **сам** восстанавливать архив: разворачивает файлы, опционально поднимает docker compose, заливает дамп БД. Используется отдельный compose-профиль `restore` — он монтирует `/opt` в режиме RW и пробрасывает `docker.sock`, поэтому daemon, который работает с RO-/opt, не трогается.
+
+### Автоматическое восстановление
+
+```bash
+cd /opt/unigrandbackup
+
+# 1. Положи архив в локальное хранилище бэкапов (или укажи свой путь)
+sudo cp /path/to/myapp-20260520-030000.tar.gz \
+        /var/backups/unigrandbackup/myapp/
+
+# 2. Запусти restore (одноразовый контейнер с RW /opt + docker.sock)
+sudo docker compose --profile restore run --rm unigrandbackup-restore \
+        /var/backups/unigrandbackup/myapp/myapp-20260520-030000.tar.gz \
+        --force
+```
+
+Флаги команды `restore`:
+
+| Флаг | Описание |
+|:---:|:---|
+| `--force` | Перезаписать существующие файлы и контент БД без подтверждения. **Обязателен**, если что-то по целевым путям уже существует. |
+| `--no-compose` | Не запускать `docker compose up -d`, даже если в архиве найден `docker-compose.yml`. Полезно, если контейнеры уже подняты. |
+
+Логика работы:
+
+1. Распаковка архива во временную директорию.
+2. Чтение `manifest.json` — содержит схему `unigrandbackup-1`, имя сервиса, дату, описание содержимого.
+3. Восстановление файлов в **исходные абсолютные пути** на хосте (так, как они были при бэкапе).
+4. Поиск `docker-compose.yml` среди восстановленных файлов и `docker compose up -d` (можно отключить `--no-compose`).
+5. Ожидание готовности БД через `pg_isready` (для Postgres).
+6. Заливка дампа:
+   - **Postgres custom-format** → `pg_restore --clean --if-exists --no-owner --no-acl`
+   - **Postgres plain** → `psql -v ON_ERROR_STOP=1 -f`
+   - **SQLite** → существующий файл переименовывается в `*.bak.<timestamp>`, дамп заливается заново через `sqlite3`
+
+> 💡 Чтобы автоматический подъём compose сработал — добавь `docker-compose.yml` (или весь корень сервиса) в `services[].paths` сервиса.
+
+### Ручное восстановление (если нужно вытащить отдельные части)
+
+**Распаковать архив:**
+```bash
+tar -xzf myapp-20260520-030000.tar.gz      # распакует в myapp-20260520-030000/
+```
+
 **Postgres custom-format:**
 ```bash
-pg_restore -h <host> -U <user> -d <newdb> --clean --if-exists -j 4 < bedolaga-..../databases/<db>.dump
+pg_restore -h <host> -U <user> -d <db> --clean --if-exists -j 4 \
+    < myapp-20260520-030000/databases/<db>.dump
 ```
 
 **SQLite:**
 ```bash
-gunzip -c bedolaga-..../databases/<db>.sql.gz | sqlite3 new-database.sqlite
-```
-
-**Файлы:**
-```bash
-tar -xzf bedolaga-20260520-030000.tar.gz   # распакует в bedolaga-20260520-030000/files/
+gunzip -c myapp-20260520-030000/databases/<db>.sql.gz | sqlite3 new-database.sqlite
 ```
 
 ---

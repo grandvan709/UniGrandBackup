@@ -8,65 +8,46 @@ global:
   local_retention: 7                         # сколько последних архивов хранить локально per service
   timezone: Europe/Moscow                    # для cron-расписаний и timestamp-ов в именах файлов
   log_level: INFO                            # DEBUG | INFO | WARNING | ERROR
+  language: ru                               # ru | en — язык логов и Telegram-сообщений
 
 services:
 
-  # ---------- Bedolaga: бот + postgres + redis + файлы ----------
-  - name: bedolaga
+  # ---------- myapp: файлы + postgres ----------
+  - name: myapp
     enabled: true
     schedule: "0 3 * * *"                    # каждый день в 03:00 (по global.timezone)
     paths:
-      - /opt/remnawave-bedolaga-telegram-bot/.env
-      - /opt/remnawave-bedolaga-telegram-bot/data
+      - /opt/myapp/.env
+      - /opt/myapp/data
     databases:
       - kind: postgres
-        host: remnawave_bot_db               # имя docker-контейнера (резолвится в bot_network)
+        host: myapp-db                       # имя docker-контейнера (резолвится в myapp_network)
         port: 5432
-        user: remnawave_user
-        password_env: BEDOLAGA_DB_PASSWORD   # значение в .env: BEDOLAGA_DB_PASSWORD=...
-        database: remnawave_bot
+        user: myapp_user
+        password_env: MYAPP_DB_PASSWORD      # значение в .env: MYAPP_DB_PASSWORD=...
+        database: myapp
         format: custom                       # pg_dump -Fc (binary, сжатый)
     local_retention: 7                       # переопределяет global.local_retention
     telegram:
       bot_token_env: BACKUP_BOT_TOKEN
-      chat_id: -1003859501094                # супергруппа админа
-      thread_id: 42                          # топик "Backups Bedolaga"
+      chat_id: -1001234567890                # ID супергруппы
+      thread_id: 42                          # ID топика для бэкапов myapp
       send_last_only: true
       send_summary: true
 
-  # ---------- n8n: postgres + папка data + .env ----------
-  - name: n8n
+  # ---------- filestore: только файлы (без БД) ----------
+  - name: filestore
     enabled: true
-    schedule: "30 3 * * *"                   # 03:30 (через 30 мин после Bedolaga)
+    schedule: "30 3 * * *"                   # 03:30
     paths:
-      - /opt/automations/n8n/.env
-      - /opt/automations/n8n/data
-    databases:
-      - kind: postgres
-        host: automations-db                 # docker-контейнер в сети 'automations'
-        port: 5432
-        user: n8n
-        password_env: N8N_DB_PASSWORD
-        database: n8n
-        format: custom
-    telegram:
-      bot_token_env: BACKUP_BOT_TOKEN
-      chat_id: -1003859501094
-      thread_id: 43                          # топик "Backups n8n"
-
-  # ---------- claude-bridge: только OAuth-кредитки и .env (без БД) ----------
-  - name: claude-bridge
-    enabled: true
-    schedule: "0 4 * * *"                    # 04:00
-    paths:
-      - /opt/automations/claude-bridge/.env
-      - /opt/automations/claude-bridge/claude-home
+      - /opt/filestore/.env
+      - /opt/filestore/uploads
     # databases: []   — нет БД, секцию опускаем целиком
-    local_retention: 14                      # OAuth-сессии редкие, можно хранить дольше
+    local_retention: 14                      # храним дольше, изменения редкие
     telegram:
       bot_token_env: BACKUP_BOT_TOKEN
-      chat_id: -1003859501094
-      thread_id: 44
+      chat_id: -1001234567890
+      thread_id: 43
 
   # ---------- Пример с SQLite (если когда-то понадобится) ----------
   # - name: legacy-sqlite-app
@@ -79,5 +60,5 @@ services:
   #       path: /opt/legacy/data/app.db
   #   telegram:
   #     bot_token_env: BACKUP_BOT_TOKEN
-  #     chat_id: -1003859501094
-  #     thread_id: 45
+  #     chat_id: -1001234567890
+  #     thread_id: 44

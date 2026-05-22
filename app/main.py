@@ -195,6 +195,7 @@ def _run_restore(
     skip_db: bool,
     db_only: bool,
     remap_owner: str | None,
+    dry_run: bool,
 ) -> int:
     """Delegated to restore.py so that the import is lazy."""
     from .restore import restore_archive
@@ -219,6 +220,7 @@ def _run_restore(
             skip_db=skip_db,
             db_only=db_only,
             remap_owner=remap,
+            dry_run=dry_run,
         )
         return 0
     except Exception as e:
@@ -268,6 +270,11 @@ def main(argv: list[str] | None = None) -> int:
         help="override file ownership during restore (e.g. --remap-owner 1000:1000); "
              "default: preserve uid/gid recorded in manifest",
     )
+    p_restore.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print planned actions (files, compose, DB) without applying anything",
+    )
 
     args = parser.parse_args(argv)
     cmd = args.cmd or "daemon"
@@ -303,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
             skip_db=args.skip_db,
             db_only=args.db_only,
             remap_owner=args.remap_owner,
+            dry_run=args.dry_run,
         )
     _print_banner(config)
     return _run_daemon(config)

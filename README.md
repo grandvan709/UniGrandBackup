@@ -13,8 +13,9 @@
 ## 🚀 Возможности
 
 - ✅ **Одновременно несколько сервисов** в одном контейнере (каждый со своим расписанием cron-формата)
-- ✅ **Файлы и папки** → tar.gz внутри единого артефакта
-- ✅ **PostgreSQL** через `pg_dump -Fc` (custom format, готов к `pg_restore -j`)
+- ✅ **Файлы и папки** → tar.gz внутри единого артефакта, с сохранением uid/gid/mode
+- ✅ **PostgreSQL 15-18** через `pg_dump -Fc` с auto-detect версии сервера + multi-version клиенты в образе
+- ✅ **MySQL 5.7+ / 8.x** и **MariaDB 10.x / 11.x** через `mysqldump --single-transaction` (streaming → gzip)
 - ✅ **SQLite** через `sqlite3 .dump` (gzip-compressed)
 - ✅ **Локальная ротация** N последних архивов на сервис (старые удаляются автоматически)
 - ✅ **Telegram** — последний созданный бэкап отправляется в указанный chat/топик (`message_thread_id` поддерживается)
@@ -146,6 +147,16 @@ services:
 
 ### Базы данных
 
+UniGrandBackup поддерживает **PostgreSQL**, **MySQL/MariaDB** и **SQLite**. Матрица версий и тулзов:
+
+| СУБД | Поддерживаемые версии | Backup tool | Restore tool | Формат архива |
+|:--|:--|:--|:--|:--|
+| **PostgreSQL** | 15, 16, 17, 18 (любая, с auto-detect) | `pg_dump -Fc` (custom) | `pg_restore --clean --if-exists --no-owner --no-acl` | `.dump` (binary) |
+| **PostgreSQL plain** | 15, 16, 17, 18 | `pg_dump -Fp` | `psql -v ON_ERROR_STOP=1 -f` | `.sql` (plain SQL) |
+| **MySQL** | 5.7, 8.0, 8.4 | `mysqldump --single-transaction --routines --triggers --events` | `mysql < gunzip` | `.sql.gz` |
+| **MariaDB** | 10.5+, 10.6, 10.11, 11.x | `mysqldump --single-transaction ...` (через mariadb-client) | `mysql < gunzip` | `.sql.gz` |
+| **SQLite** | 3.x | `sqlite3 .dump` | `sqlite3 < gunzip` | `.sql.gz` |
+
 **PostgreSQL:**
 
 ```yaml
@@ -156,7 +167,25 @@ services:
   password_env: MYAPP_DB_PASSWORD     # имя env-переменной из .env
   database: myapp
   format: custom            # 'custom' (рек.) или 'plain'
+  client_version: auto      # auto (default) | 15 | 16 | 17 | 18
+                            # auto: детектит версию сервера через SHOW server_version_num
+                            #       и подключает matching pg_dump из образа
 ```
+
+Все 4 версии pg-клиентов (15/16/17/18) ставятся в образ через apt.postgresql.org. Используемая версия записывается в `manifest.json` (`client_version_used`), чтобы restore смог взять совместимый `pg_restore`.
+
+**MySQL / MariaDB:**
+
+```yaml
+- kind: mysql               # 'mysql' или 'mariadb' — клиент один (mariadb-client)
+  host: webapp-db
+  port: 3306
+  user: webapp
+  password_env: WEBAPP_DB_PASSWORD
+  database: webapp
+```
+
+Используется `mariadb-client` — он совместим с MySQL 5.7+, 8.x, 9.x и MariaDB 10.x/11.x на уровне протокола. Dump делается с `--single-transaction --routines --triggers --events`, поток сразу пайпится в gzip (без буфера в памяти).
 
 **SQLite:**
 
@@ -319,6 +348,7 @@ sudo docker compose --profile restore run --rm unigrandbackup-restore \
 | `--skip-db` | Восстановить только файлы + compose, **не** трогать БД. Удобно когда хочешь сначала разобраться с приложением, а БД залить отдельно. |
 | `--db-only` | Восстановить **только** БД-дампы; не трогать файлы и не запускать compose. Полезно если файлы уже на хосте, БД нужно подменить. |
 | `--remap-owner UID:GID` | Переназначить владельца восстанавливаемых файлов (по умолчанию uid/gid берётся из манифеста). Пример: `--remap-owner 1000:1000`. |
+| `--dry-run` | Распечатать план рестора (какие файлы, какие БД, куда compose) — **ничего не применяя**. Удобно перед запуском на проде. |
 
 Логика работы:
 

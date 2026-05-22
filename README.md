@@ -1,62 +1,70 @@
 <h1 align=center><code>UniGrandBackup</code></h1>
 
-> Универсальный Docker-контейнер для регулярного бэкапа любого количества сервисов на одном Linux-сервере. Файлы + базы данных → локальная ротация N последних копий + автоматическая отправка свежей копии в Telegram-топик.
+<p align="center">
+  <b>🇬🇧 English</b>
+  &nbsp;·&nbsp;
+  <a href="./README_RU.md">🇷🇺 Русский</a>
+</p>
+
+> Universal Docker container for scheduled backups of any number of services on a single Linux host. Files + databases → local rotation of the last N copies + automatic delivery of the freshest archive to a Telegram topic.
 
 <p align=center>
-Создан как замена встроенным «однострочным» бэкапам отдельных сервисов:
-вместо <b>N разных механизмов</b> с разной судьбой и форматами — <b>один контейнер</b>, описывающий все сервисы в одном <code>config.yaml</code>,
-с предсказуемым форматом архива, прозрачной ротацией и доставкой в Telegram.
+Built as a replacement for the ad-hoc one-liner backups each service ships:
+instead of <b>N different mechanisms</b> with different fates and formats — <b>one container</b>
+describing all services in one <code>config.yaml</code>, with a predictable archive format,
+transparent rotation, and Telegram delivery.
 </p>
 
 ---
 
-## 🚀 Возможности
+## 🚀 Features
 
-- ✅ **Одновременно несколько сервисов** в одном контейнере (каждый со своим расписанием cron-формата)
-- ✅ **Файлы и папки** → tar.gz внутри единого артефакта
-- ✅ **PostgreSQL** через `pg_dump -Fc` (custom format, готов к `pg_restore -j`)
-- ✅ **SQLite** через `sqlite3 .dump` (gzip-compressed)
-- ✅ **Локальная ротация** N последних архивов на сервис (старые удаляются автоматически)
-- ✅ **Telegram** — последний созданный бэкап отправляется в указанный chat/топик (`message_thread_id` поддерживается)
-- ✅ **Per-service настройки** Telegram-бота: разные сервисы могут писать в разные топики и даже использовать разных ботов
-- ✅ **Cron-формат** расписаний через APScheduler
-- ✅ **`paths_exclude`** — glob-паттерны (с поддержкой `**`) для исключения подпапок/файлов: `**/.git`, `**/node_modules`, `**/__pycache__`, `**/backups`
-- ✅ **Восстановление одной командой** — `restore <archive>` распаковывает файлы, поднимает docker compose и заливает дамп БД. Формат архива самодостаточен (есть `manifest.json` со всей метой)
-- ✅ **Локализация RU / EN** для логов и Telegram-сообщений (`global.language`)
-- ✅ **Читаемые цветные логи** в `docker logs` (плюс опциональный JSON-режим через `LOG_FORMAT=json`)
-- ✅ **Запуск разовый или daemon** — можно поднять как фоновый сервис или вызывать руками через `run <service>`
-
----
-
-## 📋 Требования
-
-- Linux-сервер с Docker + docker compose v2 (только для запуска **самого** UniGrandBackup)
-- Telegram-бот с доступом к админ-чату / топику (для отправки артефактов)
-- Доступ из контейнера UniGrandBackup до того, что бэкапится:
-  - **Файлы** — bind-mount нужных директорий внутрь контейнера (например `/opt:/opt:ro`)
-  - **Postgres** — сетевой доступ до `host:port` (docker-сеть с контейнером БД / `host.docker.internal` / прямой IP/DNS)
-  - **SQLite** — путь к `.db`-файлу, доступный внутри контейнера через volume
-
-> 💡 **Бэкапаемые сервисы НЕ обязаны быть в Docker.** Можно бэкапить bare-metal Postgres (через host-IP), SQLite-файлы любого приложения, systemd-сервисы и т. п. Docker-специфика только в команде `restore` — для не-докеризованного сервиса используется флаг `--no-compose`, дальше всё работает.
+- ✅ **Multiple services in one container**, each with its own cron schedule
+- ✅ **Files and directories** → tar.gz inside a single artifact, preserving uid/gid/mode
+- ✅ **PostgreSQL 15–18** via `pg_dump -Fc` with server-version auto-detect + multi-version clients in the image
+- ✅ **MySQL 5.7+ / 8.x** and **MariaDB 10.x / 11.x** via `mysqldump --single-transaction` (streaming → gzip)
+- ✅ **SQLite** via `sqlite3 .dump` (gzip-compressed)
+- ✅ **Local rotation** of the N most recent archives per service (older ones auto-deleted)
+- ✅ **Telegram** — the latest archive is sent to the configured chat/topic (`message_thread_id` supported)
+- ✅ **Per-service Telegram settings** — different services can post to different topics and even use different bots
+- ✅ **Cron-style schedules** via APScheduler
+- ✅ **`paths_exclude`** — glob patterns (with `**` support) to skip junk: `**/.git`, `**/node_modules`, `**/__pycache__`, `**/backups`
+- ✅ **One-command restore** — `restore <archive>` unpacks files, brings up docker compose, and loads the DB dump. The archive is self-describing (`manifest.json` carries all metadata)
+- ✅ **RU / EN localization** of logs and Telegram messages (`global.language`)
+- ✅ **Readable color logs** in `docker logs` (plus an optional JSON mode via `LOG_FORMAT=json`)
+- ✅ **One-shot or daemon** — run as a background service or invoke `run <service>` manually
 
 ---
 
-## 🔧 Установка
+## 📋 Requirements
 
-### 1. Установить Docker (если ещё нет)
+- Linux server with Docker + docker compose v2 (only to run **UniGrandBackup itself**)
+- A Telegram bot with access to the admin chat / topic (for delivering archives)
+- The UniGrandBackup container must be able to reach whatever it's backing up:
+  - **Files** — bind-mount the relevant directories into the container (e.g. `/opt:/opt:ro`)
+  - **Postgres** — network reachability to `host:port` (same docker network as the DB container / `host.docker.internal` / a direct IP/DNS)
+  - **SQLite** — path to the `.db` file accessible inside the container via a volume
+
+> 💡 **The services you back up don't have to be in Docker.** You can back up a bare-metal Postgres (via host IP), SQLite files of any application, systemd services, and so on. The Docker-specific part lives only in the `restore` command — for a non-Dockerized service use the `--no-compose` flag and the rest still works.
+
+---
+
+## 🔧 Installation
+
+### 1. Install Docker (if you don't have it)
 
 ```bash
 sudo curl -fsSL https://get.docker.com | sudo sh
 ```
 
-### 2. Создать рабочую директорию
+### 2. Create the working directory
 
 ```bash
 sudo mkdir -p /opt/unigrandbackup
 cd /opt/unigrandbackup
 ```
 
-### 3. Скачать `docker-compose.yml` и шаблоны конфига
+### 3. Download `docker-compose.yml` and the config templates
 
 ```bash
 sudo wget -O docker-compose.yml https://raw.githubusercontent.com/grandvan709/UniGrandBackup/master/docker-compose.yml
@@ -64,34 +72,34 @@ sudo wget -O config.yaml https://raw.githubusercontent.com/grandvan709/UniGrandB
 sudo wget -O .env https://raw.githubusercontent.com/grandvan709/UniGrandBackup/master/.env.example
 ```
 
-### 4. Заполнить `config.yaml` и `.env`
+### 4. Fill in `config.yaml` and `.env`
 
 ```bash
-sudo nano config.yaml   # секции services: под свои сервисы (см. ниже)
-sudo nano .env          # реальные значения секретов (имена из *_env)
+sudo nano config.yaml   # describe your services under services: (see below)
+sudo nano .env          # actual secret values (names come from *_env)
 sudo chmod 600 .env
 ```
 
-### 5. Создать локальную папку под архивы
+### 5. Create the local archive directory
 
 ```bash
 sudo mkdir -p /var/backups/unigrandbackup
 ```
 
-### 6. Поднять
+### 6. Start it
 
 ```bash
 sudo docker compose up -d
 sudo docker compose logs -ft
 ```
 
-При первом старте контейнер прочитает `config.yaml`, выведет резюме сервисов и встанет на расписание.
+On first start the container reads `config.yaml`, prints a summary of services, and starts the scheduler.
 
 ---
 
-## ⚙️ Конфигурация
+## ⚙️ Configuration
 
-### Минимальный пример `config.yaml`
+### Minimal `config.yaml`
 
 ```yaml
 global:
@@ -99,7 +107,7 @@ global:
   local_retention: 7
   timezone: Europe/Moscow
   log_level: INFO
-  language: ru                 # ru | en — язык логов и Telegram-сообщений
+  language: en                 # ru | en — language for logs and Telegram messages
 
 services:
   - name: myapp
@@ -121,75 +129,103 @@ services:
       thread_id: 42
 ```
 
-### Глобальные настройки (`global:`)
+### Global settings (`global:`)
 
-| Поле | Тип | Default | Описание |
+| Field | Type | Default | Description |
 |:----:|:----:|:----:|:---|
-| `local_storage_path` | path | `/var/backups` | Базовая директория для локальных архивов |
-| `local_retention` | int | `7` | Сколько последних архивов хранить на сервис (можно переопределить) |
-| `timezone` | str | `UTC` | IANA-таймзона для cron-расписаний и timestamp-ов в именах файлов и логов |
+| `local_storage_path` | path | `/var/backups` | Base directory for local archives |
+| `local_retention` | int | `7` | How many recent archives to keep per service (can be overridden) |
+| `timezone` | str | `UTC` | IANA timezone for cron schedules and timestamps in file names and logs |
 | `log_level` | str | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `language` | str | `ru` | Язык логов и Telegram-сообщений (`ru` / `en`) |
+| `language` | str | `ru` | Language for logs and Telegram messages (`ru` / `en`) |
 
-### Сервис (`services:` — массив, по элементу на сервис)
+### Service (`services:` — array, one element per service)
 
-| Поле | Тип | Обязательно | Описание |
+| Field | Type | Required | Description |
 |:----:|:----:|:----:|:---|
-| `name` | str | да | Уникальное имя (a-z, 0-9, `_`, `-`). Используется как имя поддиректории и префикс архива |
-| `enabled` | bool | нет | `true` по умолчанию. `false` = пропустить при загрузке расписания |
-| `schedule` | cron | да | Cron-выражение в формате APScheduler (`min hour day month dow`) |
-| `paths` | list of paths | нет | Файлы/папки для бэкапа (упакуются tar внутрь одного архива) |
-| `paths_exclude` | list of glob | нет | Glob-паттерны (с поддержкой `**`), исключаемые из `paths`. Пути сопоставляются **относительно** каждого корня в `paths`. Примеры: `**/.git`, `**/node_modules`, `**/__pycache__`, `**/backups`, `**/*.log` |
-| `databases` | list | нет | Базы данных (см. ниже) |
-| `local_retention` | int | нет | Переопределяет `global.local_retention` |
-| `telegram` | object | нет | Отправка в Telegram (см. ниже) |
+| `name` | str | yes | Unique name (a-z, 0-9, `_`, `-`). Used as the subdirectory name and archive prefix |
+| `enabled` | bool | no | `true` by default. `false` = skip when loading the schedule |
+| `schedule` | cron | yes | Cron expression in APScheduler format (`min hour day month dow`) |
+| `paths` | list of paths | no | Files/directories to back up (packed into a single tar inside the archive) |
+| `paths_exclude` | list of glob | no | Glob patterns (with `**` support) to exclude from `paths`. Patterns are matched **relative** to each root in `paths`. Examples: `**/.git`, `**/node_modules`, `**/__pycache__`, `**/backups`, `**/*.log` |
+| `databases` | list | no | Databases (see below) |
+| `local_retention` | int | no | Overrides `global.local_retention` |
+| `telegram` | object | no | Telegram delivery (see below) |
 
-### Базы данных
+### Databases
+
+UniGrandBackup supports **PostgreSQL**, **MySQL/MariaDB**, and **SQLite**. Versions and tooling matrix:
+
+| Engine | Supported versions | Backup tool | Restore tool | Archive format |
+|:--|:--|:--|:--|:--|
+| **PostgreSQL** | 15, 16, 17, 18 (any, with auto-detect) | `pg_dump -Fc` (custom) | `pg_restore --clean --if-exists --no-owner --no-acl` | `.dump` (binary) |
+| **PostgreSQL plain** | 15, 16, 17, 18 | `pg_dump -Fp` | `psql -v ON_ERROR_STOP=1 -f` | `.sql` (plain SQL) |
+| **MySQL** | 5.7, 8.0, 8.4 | `mysqldump --single-transaction --routines --triggers --events` | `mysql < gunzip` | `.sql.gz` |
+| **MariaDB** | 10.5+, 10.6, 10.11, 11.x | `mysqldump --single-transaction ...` (via mariadb-client) | `mysql < gunzip` | `.sql.gz` |
+| **SQLite** | 3.x | `sqlite3 .dump` | `sqlite3 < gunzip` | `.sql.gz` |
 
 **PostgreSQL:**
 
 ```yaml
 - kind: postgres
-  host: myapp-db            # имя docker-контейнера или хост
+  host: myapp-db            # docker container name or host
   port: 5432
   user: myapp_user
-  password_env: MYAPP_DB_PASSWORD     # имя env-переменной из .env
+  password_env: MYAPP_DB_PASSWORD     # env-var name from .env
   database: myapp
-  format: custom            # 'custom' (рек.) или 'plain'
+  format: custom            # 'custom' (recommended) or 'plain'
+  client_version: auto      # auto (default) | 15 | 16 | 17 | 18
+                            # auto: detects server version via SHOW server_version_num
+                            #       and invokes the matching pg_dump from the image
 ```
+
+All four pg-client versions (15/16/17/18) are installed in the image via apt.postgresql.org. The version actually used is recorded in `manifest.json` (`client_version_used`) so restore can pick a compatible `pg_restore`.
+
+**MySQL / MariaDB:**
+
+```yaml
+- kind: mysql               # 'mysql' or 'mariadb' — one client (mariadb-client)
+  host: webapp-db
+  port: 3306
+  user: webapp
+  password_env: WEBAPP_DB_PASSWORD
+  database: webapp
+```
+
+Uses `mariadb-client`, which is wire-protocol-compatible with MySQL 5.7+, 8.x, 9.x and MariaDB 10.x/11.x. Dump runs with `--single-transaction --routines --triggers --events`, and `mysqldump`'s stdout is piped straight into gzip (no in-memory buffering).
 
 **SQLite:**
 
 ```yaml
 - kind: sqlite
-  path: /opt/myapp/data/app.db    # путь должен быть доступен внутри контейнера
+  path: /opt/myapp/data/app.db    # path must be accessible inside the container
 ```
 
 ### Telegram
 
 ```yaml
 telegram:
-  bot_token_env: BACKUP_BOT_TOKEN   # имя env-переменной с токеном @BotFather
-  chat_id: -1001234567890           # ID чата/группы (для топика — ID супергруппы)
-  thread_id: 42                     # ID топика (опционально, для форумов)
-  send_last_only: true              # отправлять только самый свежий архив (а не все)
-  send_summary: true                # при ошибке отправки документа — слать текстовый алерт
+  bot_token_env: BACKUP_BOT_TOKEN   # env-var name carrying the @BotFather token
+  chat_id: -1001234567890           # chat/group ID (for a topic — the supergroup ID)
+  thread_id: 42                     # topic ID (optional, for forum chats)
+  send_last_only: true              # send only the freshest archive (not all)
+  send_summary: true                # if document upload fails — send a text alert instead
 ```
 
-### Переменные окружения (`.env`)
+### Environment variables (`.env`)
 
 ```ini
-BACKUP_BOT_TOKEN=123456789:AAH...    # токен Telegram-бота от @BotFather
-MYAPP_DB_PASSWORD=...                # пароль Postgres для myapp
+BACKUP_BOT_TOKEN=123456789:AAH...    # Telegram bot token from @BotFather
+MYAPP_DB_PASSWORD=...                # Postgres password for myapp
 ```
 
-⚠️ `.env` ОБЯЗАТЕЛЬНО в `.gitignore` и `chmod 600`. Имена переменных в `config.yaml` указываются как `*_env: NAME`, а сами значения — только в `.env`.
+⚠️ `.env` **must** be in `.gitignore` with `chmod 600`. Variable **names** go into `config.yaml` as `*_env: NAME`; their **values** live only in `.env`.
 
 ---
 
-## 🐳 Docker сети
+## 🐳 Docker networks
 
-Чтобы UniGrandBackup мог достучаться до Postgres-контейнеров других сервисов, его контейнер должен быть подключён в те же docker-сети. В `docker-compose.yml` укажи через `external: true` все нужные сети:
+For UniGrandBackup to reach the Postgres containers of other services, its container must be attached to the same docker networks. In `docker-compose.yml` reference each required network as `external: true`:
 
 ```yaml
 networks:
@@ -197,54 +233,54 @@ networks:
     external: true
 ```
 
-Их имена должны точно соответствовать тем что показывает `docker network ls`.
+The names must match exactly what `docker network ls` shows.
 
 ---
 
-## 🚀 Запуск
+## 🚀 Usage
 
 ```bash
-# Поднять (daemon-режим, по расписанию)
+# Start (daemon mode, on schedule)
 sudo docker compose up -d
 
-# Смотреть логи
+# Tail logs
 sudo docker compose logs -ft
 
-# Остановить
+# Stop
 sudo docker compose down
 
-# Перезагрузить с новой версией образа
+# Pull a new image version and restart
 sudo docker compose pull && sudo docker compose up -d && sudo docker compose logs -f -t
 
-# Разовый бэкап одного сервиса (вне расписания, для проверки)
+# One-off backup of a single service (off-schedule, for verification)
 sudo docker compose exec unigrandbackup python -m app.main run myapp
 
-# Показать список загруженных сервисов
+# Print the list of loaded services
 sudo docker compose exec unigrandbackup python -m app.main list
 ```
 
 ---
 
-## 📁 Структура артефактов
+## 📁 Artifact layout
 
-После каждого запуска один сервис создаёт **один** архив:
+Each scheduled run produces **one** archive per service:
 
 ```
 /var/backups/unigrandbackup/
 ├── myapp/
-│   ├── myapp-20260520-030000.tar.gz       # сегодня
+│   ├── myapp-20260520-030000.tar.gz       # today
 │   ├── myapp-20260519-030000.tar.gz
-│   └── ...                                # хранится N=local_retention копий
+│   └── ...                                # N=local_retention copies kept
 └── filestore/
     ├── filestore-20260520-033000.tar.gz
     └── ...
 ```
 
-Внутри одного `<service>-<YYYYMMDD-HHMMSS>.tar.gz`:
+Inside a `<service>-<YYYYMMDD-HHMMSS>.tar.gz`:
 
 ```
 myapp-20260520-030000/
-├── manifest.json              # метаданные бэкапа (формат, сервис, содержимое)
+├── manifest.json              # backup metadata (format, service, contents)
 ├── files/
 │   ├── .env
 │   └── data/...
@@ -252,33 +288,33 @@ myapp-20260520-030000/
     └── myapp.dump
 ```
 
-`manifest.json` — описание содержимого, нужен для восстановления через `app.main restore`.
-`databases/*.dump` — это `pg_dump -Fc` (восстановить через `pg_restore`).
-`databases/*.sql.gz` — это gzipped `sqlite3 .dump` (восстановить через `gunzip | sqlite3 newdb.sqlite`).
+`manifest.json` — describes contents, required by `app.main restore`.
+`databases/*.dump` — `pg_dump -Fc` (restore via `pg_restore`).
+`databases/*.sql.gz` — gzipped `sqlite3 .dump` or `mysqldump` (restore via `gunzip | sqlite3 newdb.sqlite` or `mysql`).
 
 ---
 
-## 💬 Пример Telegram-сообщения
+## 💬 Sample Telegram message
 
 ```
 🗄 UniGrandBackup
 ━━━━━━━━━━━━━━━━━━━━
-📦 Сервис: myapp
-✅ Статус: OK
-🕐 Время:  2026-05-20 03:00:01 MSK
-⏱ Длится:  12.4 с
-📊 Размер: 12.4 MB
+📦 Service: myapp
+✅ Status:  OK
+🕐 Time:    2026-05-20 03:00:01 UTC
+⏱ Took:    12.4 s
+📊 Size:    12.4 MB
 
-📥 Содержимое:
-   • 📁 Файлы: 2 пути
+📥 Contents:
+   • 📁 Files: 2 paths
    • 🐘 PostgreSQL: myapp
 ```
 
-Сам файл `myapp-20260520-030000.tar.gz` приходит как `document` в тот же топик.
+The `myapp-20260520-030000.tar.gz` file itself arrives as a `document` in the same topic.
 
 ---
 
-## 💡 Обновление
+## 💡 Updating
 
 ```bash
 cd /opt/unigrandbackup
@@ -287,59 +323,61 @@ sudo docker compose pull
 sudo docker compose up -d && sudo docker compose logs -f -t
 ```
 
-> Перед обновлением полезно сверить актуальность `config.yaml` с примером из репо (`examples/config.example.yaml`) — там бывают новые поля.
+> Before updating it's a good idea to diff your `config.yaml` against the repo's example (`examples/config.example.yaml`) — new fields get added there.
 
 ---
 
-## 🔄 Восстановление
+## 🔄 Restore
 
-UniGrandBackup умеет **сам** восстанавливать архив: разворачивает файлы, опционально поднимает docker compose, заливает дамп БД. Используется отдельный compose-профиль `restore` — он монтирует `/opt` в режиме RW и пробрасывает `docker.sock`, поэтому daemon, который работает с RO-/opt, не трогается.
+UniGrandBackup can **restore an archive on its own**: it unpacks files, optionally brings up docker compose, and loads the DB dump. A dedicated compose profile `restore` mounts `/opt` as RW and exposes `docker.sock`, leaving the daemon (which runs with `/opt:ro`) untouched.
 
-### Автоматическое восстановление
+### Automatic restore
 
 ```bash
 cd /opt/unigrandbackup
 
-# 1. Положи архив в локальное хранилище бэкапов (или укажи свой путь)
+# 1. Put the archive into the local backup directory (or pass a custom path)
 sudo cp /path/to/myapp-20260520-030000.tar.gz \
         /var/backups/unigrandbackup/myapp/
 
-# 2. Запусти restore (одноразовый контейнер с RW /opt + docker.sock)
+# 2. Run restore (one-shot container with RW /opt + docker.sock)
 sudo docker compose --profile restore run --rm unigrandbackup-restore \
         /var/backups/unigrandbackup/myapp/myapp-20260520-030000.tar.gz \
         --force
 ```
 
-Флаги команды `restore`:
+`restore` flags:
 
-| Флаг | Описание |
+| Flag | Description |
 |:---:|:---|
-| `--force` | Перезаписать существующие файлы и контент БД без подтверждения. **Обязателен**, если что-то по целевым путям уже существует. |
-| `--no-compose` | Не запускать `docker compose up -d`, даже если в архиве найден `docker-compose.yml`. Полезно, если контейнеры уже подняты. |
-| `--skip-db` | Восстановить только файлы + compose, **не** трогать БД. Удобно когда хочешь сначала разобраться с приложением, а БД залить отдельно. |
-| `--db-only` | Восстановить **только** БД-дампы; не трогать файлы и не запускать compose. Полезно если файлы уже на хосте, БД нужно подменить. |
-| `--remap-owner UID:GID` | Переназначить владельца восстанавливаемых файлов (по умолчанию uid/gid берётся из манифеста). Пример: `--remap-owner 1000:1000`. |
+| `--force` | Overwrite existing files and DB contents without confirmation. **Required** if anything already exists at the destination paths. |
+| `--no-compose` | Don't run `docker compose up -d` even if the archive contains a `docker-compose.yml`. Handy when the containers are already running. |
+| `--skip-db` | Restore files + compose only; **skip** the DB dump replay. Useful when you want to deal with the app first and the DB separately. |
+| `--db-only` | Restore **only** the DB dumps; skip files and compose-up. Useful when files are already on the host and you only need to refresh the DB. |
+| `--remap-owner UID:GID` | Override file ownership during restore (default: preserve uid/gid recorded in the manifest). Example: `--remap-owner 1000:1000`. |
+| `--dry-run` | Print the restore plan (which files, which DBs, where to compose) — **without applying anything**. Handy before running against prod. |
 
-Логика работы:
+Workflow:
 
-1. Распаковка архива во временную директорию.
-2. Чтение `manifest.json` — содержит схему `unigrandbackup-1`, имя сервиса, дату, описание содержимого, **uid/gid/mode** каждого пути.
-3. Восстановление файлов в **исходные абсолютные пути** на хосте, с сохранением `uid`/`gid`/`mode` из манифеста (если запущены как root, что верно внутри docker-контейнера).
-4. Поиск `docker-compose.yml` среди восстановленных файлов и `docker compose up -d` (можно отключить `--no-compose`). Вывод docker compose стримится в наши логи (видны прогресс билда / pull в real-time).
-5. **Auto-attach к docker-сети БД-контейнера** — restore сам подключается к свежесозданным docker-сетям БД, чтобы `pg_isready -h <container_name>` мог резолвить имя.
-6. Ожидание готовности БД через `pg_isready` (для Postgres).
-7. Заливка дампа:
+1. Extract the archive into a temp directory.
+2. Read `manifest.json` — contains schema `unigrandbackup-1`, service name, timestamp, contents description, **uid/gid/mode** for every path.
+3. Restore files to their **original absolute paths** on the host, preserving `uid`/`gid`/`mode` from the manifest (when running as root, which is the default inside a docker container).
+4. Find `docker-compose.yml` among the restored files and run `docker compose up -d` (disable via `--no-compose`). docker compose output is streamed into our logs (build/pull progress visible in real time).
+5. **Auto-attach to the DB container's docker network** — restore connects itself to the freshly-created DB networks so `pg_isready -h <container_name>` can resolve.
+6. Wait for the DB via `pg_isready` (Postgres) or `mysqladmin ping` (MySQL/MariaDB).
+7. Load the dump:
    - **Postgres custom-format** → `pg_restore --clean --if-exists --no-owner --no-acl`
    - **Postgres plain** → `psql -v ON_ERROR_STOP=1 -f`
-   - **SQLite** → существующий файл переименовывается в `*.bak.<timestamp>`, дамп заливается заново через `sqlite3`
+   - **MySQL / MariaDB** → `mysql < gunzip(dump.sql.gz)`
+   - **SQLite** → the existing file is renamed to `*.bak.<timestamp>`, the dump is replayed via `sqlite3`
 
-> 💡 Чтобы автоматический подъём compose сработал — добавь `docker-compose.yml` (или весь корень сервиса) в `services[].paths` сервиса.
+> 💡 For automatic compose-up to work, add the `docker-compose.yml` (or the whole service root) to the service's `paths`.
 
 ### 🛠 Troubleshooting
 
-**1. `permission denied` или `EACCES` при старте приложения после рестора**
+**1. `permission denied` / `EACCES` when the app starts after restore**
 
-Случай редкий, но встречается: bind-mount директория (например `./data` или `./logs`) была создана docker'ом как `root:root`, а приложение внутри контейнера работает под uid 1000 (`app`, `node`). В манифесте мы храним и восстанавливаем uid/gid, но если на новом хосте маппинг другой — поможет `--remap-owner`:
+A rare-but-real case: a bind-mounted directory (e.g. `./data` or `./logs`) was created by docker as `root:root`, but the app inside the container runs as uid 1000 (`app`, `node`). We do record and restore uid/gid in the manifest, but if the mapping differs on the new host — use `--remap-owner`:
 
 ```bash
 sudo docker compose --profile restore run --rm unigrandbackup-restore \
@@ -347,33 +385,33 @@ sudo docker compose --profile restore run --rm unigrandbackup-restore \
         --force --remap-owner 1000:1000
 ```
 
-Или после рестора руками: `sudo chown -R 1000:1000 /opt/myapp/data /opt/myapp/logs`.
+Or after restore, by hand: `sudo chown -R 1000:1000 /opt/myapp/data /opt/myapp/logs`.
 
 **2. `pg_restore: error: unsupported version (1.16) in file header`**
 
-Это значит дамп сделан клиентом более новой версии, чем тот pg_restore, которым ты пытаешься заливать. UniGrandBackup делает дамп через `pg_dump 17` из своего образа; если бэкапаемый сервер постарше (PG 15), а на новом хосте ты пытаешься залить через **локальный** pg_restore 15 — провалится.
+This means the dump was produced by a newer pg_dump than the pg_restore you're trying to load it with. UniGrandBackup ships pg-clients 15/16/17/18 and uses the one matching your server version. If you're invoking `pg_restore` **outside** our container on a system with an older client — it'll fail.
 
-Способы:
-- Использовать наш restore (`docker compose --profile restore run ...`) — там pg_restore 17, читает все старые форматы.
-- Или вручную: `docker run --rm --network <db_net> -e PGPASSWORD=... -v /dump:/dump:ro postgres:17-alpine pg_restore ...` (postgres:17 поймёт format 1.16).
+Options:
+- Use our restore (`docker compose --profile restore run ...`) — it picks the right client based on `client_version_used` in the manifest.
+- Or manually: `docker run --rm --network <db_net> -e PGPASSWORD=... -v /dump:/dump:ro postgres:17-alpine pg_restore ...` (postgres:17 reads format 1.16).
 
-**3. `pg_isready` падает таймаутом (`no response`)**
+**3. `pg_isready` times out (`no response`)**
 
-Если на свежем хосте restore проходит compose-up, но потом виснет на `pg_isready` 180 секунд и отваливается — `restore_network_attached` лог должен показывать что мы подключились к сети БД. Если его нет — проверь:
-- `docker.sock` смонтирован в restore-контейнер (см. `docker-compose.yml`)?
-- Docker CLI работает внутри: `docker ps` из restore-контейнера должен показывать список.
+If restore reaches compose-up on a fresh host but then hangs on `pg_isready` for 180 seconds and dies — the `restore_network_attached` log line should be there showing we joined the DB network. If it isn't, check:
+- Is `docker.sock` mounted into the restore container (see `docker-compose.yml`)?
+- Does docker CLI work inside the container: `docker ps` from the restore container should return a list.
 
-**4. Бэкап слишком большой для Telegram (>50 MB)**
+**4. Backup too big for Telegram (>50 MB)**
 
-Telegram bots не принимают файлы >50 MB. Способы:
-- Подобрать `paths_exclude` агрессивнее (особенно `**/.git`, `**/node_modules`, `**/pgdata` для postgres bind-mounts).
-- Локальная копия в `/var/backups/<service>/` всё равно сохранится — отправка в Telegram опциональна.
+Telegram bots refuse files >50 MB. Options:
+- Tighten `paths_exclude` (especially `**/.git`, `**/node_modules`, `**/pgdata` for postgres bind-mounts).
+- The local copy in `/var/backups/<service>/` is kept regardless — Telegram delivery is optional.
 
-### Ручное восстановление (если нужно вытащить отдельные части)
+### Manual restore (pulling individual pieces)
 
-**Распаковать архив:**
+**Unpack the archive:**
 ```bash
-tar -xzf myapp-20260520-030000.tar.gz      # распакует в myapp-20260520-030000/
+tar -xzf myapp-20260520-030000.tar.gz      # extracts to myapp-20260520-030000/
 ```
 
 **Postgres custom-format:**
@@ -389,7 +427,7 @@ gunzip -c myapp-20260520-030000/databases/<db>.sql.gz | sqlite3 new-database.sql
 
 ---
 
-## 🛠 Разработка
+## 🛠 Development
 
 ```bash
 git clone -b develop https://github.com/grandvan709/UniGrandBackup
@@ -401,12 +439,12 @@ python -m app.main list
 python -m app.main run <service>
 ```
 
-Релизы — git-теги `X.Y.Z`. GitHub Actions автоматически собирает Docker-образ и пушит в `grandvan/unigrandbackup:X.Y.Z` + `:latest`.
+Releases — git tags `X.Y.Z`. GitHub Actions automatically builds the Docker image and pushes `grandvan/unigrandbackup:X.Y.Z` + `:latest`.
 
 ---
 
 <p align=center>
-    Если проект тебе полезен — поставь ⭐!<br>
+    If the project is useful to you — leave a ⭐!<br>
     <br>
     USDT TRC20: <code>TL6gHETnKqNWV4D6GjiKKahkBsAwcyWfo8</code>
 </p>

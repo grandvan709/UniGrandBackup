@@ -9,6 +9,12 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+# Supported PostgreSQL major versions. The image ships clients for each;
+# values here drive the `client_version` validator below.
+PG_CLIENT_VERSIONS: tuple[str, ...] = ("auto", "15", "16", "17", "18")
+
+PGClientVersion = Literal["auto", "15", "16", "17", "18"]
+
 
 class GlobalConfig(BaseModel):
     local_storage_path: Path = Path("/var/backups")
@@ -26,6 +32,9 @@ class PostgresDB(BaseModel):
     password_env: str
     database: str
     format: Literal["custom", "plain"] = "custom"
+    # 'auto' detects server version at backup time and picks the matching
+    # client. Specific values pin to that major version. Image must ship it.
+    client_version: PGClientVersion = "auto"
 
     def password(self) -> str:
         value = os.environ.get(self.password_env)
@@ -36,12 +45,31 @@ class PostgresDB(BaseModel):
         return value
 
 
+class MySQLDB(BaseModel):
+    """MySQL or MariaDB — protocol-compatible, single client (mariadb-client)."""
+
+    kind: Literal["mysql", "mariadb"] = "mysql"
+    host: str
+    port: int = 3306
+    user: str
+    password_env: str
+    database: str
+
+    def password(self) -> str:
+        value = os.environ.get(self.password_env)
+        if not value:
+            raise RuntimeError(
+                f"MySQL/MariaDB password env '{self.password_env}' is empty or unset"
+            )
+        return value
+
+
 class SQLiteDB(BaseModel):
     kind: Literal["sqlite"] = "sqlite"
     path: Path
 
 
-Database = PostgresDB | SQLiteDB
+Database = PostgresDB | MySQLDB | SQLiteDB
 
 
 class TelegramConfig(BaseModel):

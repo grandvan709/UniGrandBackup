@@ -7,9 +7,11 @@ RUN echo "deb http://deb.debian.org/debian bookworm main" > /etc/apt/sources.lis
     echo "deb http://deb.debian.org/debian bookworm-updates main" >> /etc/apt/sources.list && \
     echo "deb http://security.debian.org/debian-security bookworm-security main" >> /etc/apt/sources.list
 
-# pg_dump/pg_restore for Postgres 17 cluster compatibility — we use pgdg repo.
-# docker-ce-cli + docker-compose-plugin are needed for `restore` mode, which
-# can bring services up from a restored docker-compose.yml.
+# Multiple PostgreSQL client versions from pgdg so we can match server version
+# at backup/restore time (avoids "unsupported version 1.16" mismatches).
+# docker-ce-cli + docker-compose-plugin power the `restore` mode which can
+# bring up services from a restored compose file + attach to their networks.
+# mariadb-client covers both MySQL 5.7+/8.x and MariaDB 10.x/11.x.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg \
     && install -d /usr/share/postgresql-common/pgdg \
@@ -27,7 +29,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         > /etc/apt/sources.list.d/docker.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
+        postgresql-client-15 \
+        postgresql-client-16 \
         postgresql-client-17 \
+        postgresql-client-18 \
+        mariadb-client \
         sqlite3 \
         gzip \
         tar \

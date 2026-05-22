@@ -228,6 +228,57 @@ LOG_MESSAGES: dict[str, dict[Lang, str]] = {
         "ru": "Не удалось выставить mode: {dest} — {error}",
         "en": "chmod failed: {dest} — {error}",
     },
+    # --- MySQL / MariaDB ---
+    "mysql_dump_start": {
+        "ru": "mysqldump: '{database}' @ {host}:{port} ({kind})",
+        "en": "mysqldump: '{database}' @ {host}:{port} ({kind})",
+    },
+    "mysql_dump_done": {
+        "ru": "mysqldump готов: '{database}' ({size_bytes} байт)",
+        "en": "mysqldump done: '{database}' ({size_bytes} bytes)",
+    },
+    "mysql_dump_failed": {
+        "ru": "mysqldump провалился для '{database}' @ {host}: {stderr}",
+        "en": "mysqldump failed for '{database}' @ {host}: {stderr}",
+    },
+    # --- Postgres version handling ---
+    "postgres_client_version_not_installed": {
+        "ru": "Pin client_version={wanted} не установлен в образе (есть: {available}). Использую default",
+        "en": "Pinned client_version={wanted} is not installed (have: {available}). Falling back to default",
+    },
+    "postgres_client_version_fallback": {
+        "ru": "Сервер PostgreSQL {server}, использую клиент {using} (точная версия не установлена)",
+        "en": "PostgreSQL server {server}, using client {using} (exact version not installed)",
+    },
+    "postgres_server_version_query_failed": {
+        "ru": "Не удалось определить версию сервера PostgreSQL @ {host}: {error}",
+        "en": "Could not detect PostgreSQL server version @ {host}: {error}",
+    },
+    "postgres_server_version_parse_failed": {
+        "ru": "Не получилось распарсить версию сервера: {raw}",
+        "en": "Failed to parse server version: {raw}",
+    },
+    "restore_pg_client_fallback": {
+        "ru": "Не нашёл pg-клиент v{wanted}, использую v{using}",
+        "en": "Could not find pg-client v{wanted}, using v{using}",
+    },
+    "restore_pg_client_downgrade": {
+        "ru": "⚠️ Нужен pg-клиент v{wanted}+, есть только v{using} — restore может упасть на 'unsupported version'",
+        "en": "⚠️ Need pg-client v{wanted}+, only v{using} available — restore may fail on 'unsupported version'",
+    },
+    # --- Dry-run ---
+    "dry_run_would_restore_file": {
+        "ru": "[DRY-RUN] Восстановил бы: {dest} (kind={kind}, mode={mode})",
+        "en": "[DRY-RUN] Would restore: {dest} (kind={kind}, mode={mode})",
+    },
+    "dry_run_would_compose_up": {
+        "ru": "[DRY-RUN] Поднял бы docker compose в {dir}",
+        "en": "[DRY-RUN] Would `docker compose up -d` in {dir}",
+    },
+    "dry_run_would_restore_db": {
+        "ru": "[DRY-RUN] Восстановил бы БД: {kind} '{database}' @ {host}",
+        "en": "[DRY-RUN] Would restore DB: {kind} '{database}' @ {host}",
+    },
 }
 
 

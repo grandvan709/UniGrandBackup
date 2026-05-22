@@ -12,10 +12,10 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from . import __version__
-from .config import Config, PostgresDB, ServiceConfig, SQLiteDB
+from .config import Config, MySQLDB, PostgresDB, ServiceConfig, SQLiteDB
 from .i18n import t_count, t_tg
 from .storage import LocalStorage, TelegramStorage
-from .targets import backup_paths, dump_postgres, dump_sqlite
+from .targets import backup_paths, dump_mysql, dump_postgres, dump_sqlite
 from .utils import ensure_dir, human_size, make_tarball, timestamp_for_filename
 
 log = structlog.get_logger(__name__)
@@ -77,6 +77,8 @@ class BackupRunner:
                     try:
                         if isinstance(db, PostgresDB):
                             db_meta.append(dict(dump_postgres(db, staging_dir)))
+                        elif isinstance(db, MySQLDB):
+                            db_meta.append(dict(dump_mysql(db, staging_dir)))
                         elif isinstance(db, SQLiteDB):
                             db_meta.append(dict(dump_sqlite(db, staging_dir)))
                     except Exception as e:

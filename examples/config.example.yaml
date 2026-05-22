@@ -12,52 +12,75 @@ global:
 
 services:
 
-  # ---------- myapp: файлы + postgres ----------
+  # ---------- myapp: файлы + postgres (auto-version) ----------
   - name: myapp
     enabled: true
     schedule: "0 3 * * *"                    # каждый день в 03:00 (по global.timezone)
     paths:
       - /opt/myapp                           # целиком директория сервиса
-    paths_exclude:                           # glob-паттерны, относительные к каждому пути из paths
-      - "**/.git"                            # не тащим историю репозитория
-      - "**/node_modules"                    # JS-зависимости
-      - "**/__pycache__"                     # Python-кэш
-      - "**/backups"                         # старые архивы (рекурсия на нас же)
-      - "**/*.log"                           # логи приложений
+    paths_exclude:                           # glob с поддержкой **
+      - "**/.git"
+      - "**/node_modules"
+      - "**/__pycache__"
+      - "**/backups"                         # защита от рекурсии (наш дамп лежит здесь же)
+      - "**/*.log"
     databases:
       - kind: postgres
-        host: myapp-db                       # имя docker-контейнера (резолвится в myapp_network)
+        host: myapp-db                       # имя docker-контейнера или хост
         port: 5432
         user: myapp_user
         password_env: MYAPP_DB_PASSWORD      # значение в .env: MYAPP_DB_PASSWORD=...
         database: myapp
-        format: custom                       # pg_dump -Fc (binary, сжатый)
-    local_retention: 7                       # переопределяет global.local_retention
+        format: custom                       # pg_dump -Fc (binary, сжатый, рек.)
+        client_version: auto                 # auto | 15 | 16 | 17 | 18
+                                             # auto детектит версию сервера и берёт matching клиент
+    local_retention: 7
     telegram:
       bot_token_env: BACKUP_BOT_TOKEN
-      chat_id: -1001234567890                # ID супергруппы
-      thread_id: 42                          # ID топика для бэкапов myapp
+      chat_id: -1001234567890
+      thread_id: 42
       send_last_only: true
       send_summary: true
 
-  # ---------- filestore: только файлы (без БД) ----------
-  - name: filestore
-    enabled: true
-    schedule: "30 3 * * *"                   # 03:30
+  # ---------- webapp: файлы + mysql ----------
+  - name: webapp
+    enabled: false                           # выключен — пример, включи если нужно
+    schedule: "0 4 * * *"
     paths:
-      - /opt/filestore/.env
-      - /opt/filestore/uploads
-    # databases: []   — нет БД, секцию опускаем целиком
-    local_retention: 14                      # храним дольше, изменения редкие
+      - /opt/webapp
+    paths_exclude:
+      - "**/.git"
+      - "**/node_modules"
+      - "**/storage/cache"
+    databases:
+      - kind: mysql                          # 'mysql' или 'mariadb' — клиент один (mariadb-client)
+        host: webapp-db
+        port: 3306
+        user: webapp
+        password_env: WEBAPP_DB_PASSWORD
+        database: webapp
     telegram:
       bot_token_env: BACKUP_BOT_TOKEN
       chat_id: -1001234567890
       thread_id: 43
 
-  # ---------- Пример с SQLite (если когда-то понадобится) ----------
+  # ---------- filestore: только файлы (без БД) ----------
+  - name: filestore
+    enabled: true
+    schedule: "30 3 * * *"
+    paths:
+      - /opt/filestore/.env
+      - /opt/filestore/uploads
+    local_retention: 14
+    telegram:
+      bot_token_env: BACKUP_BOT_TOKEN
+      chat_id: -1001234567890
+      thread_id: 44
+
+  # ---------- Пример с SQLite ----------
   # - name: legacy-sqlite-app
   #   enabled: false
-  #   schedule: "0 5 * * 0"                  # раз в неделю в воскресенье 05:00
+  #   schedule: "0 5 * * 0"
   #   paths:
   #     - /opt/legacy/uploads
   #   databases:
@@ -66,4 +89,4 @@ services:
   #   telegram:
   #     bot_token_env: BACKUP_BOT_TOKEN
   #     chat_id: -1001234567890
-  #     thread_id: 44
+  #     thread_id: 45

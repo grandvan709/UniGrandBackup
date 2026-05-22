@@ -10,8 +10,9 @@ Flow:
      output to our log. Requires docker CLI + /var/run/docker.sock mount.
   5. For each database in manifest:
        - Auto-attach our container to the DB container's docker networks so
-         `pg_isready -h <container_name>` can resolve.
+         `pg_isready -h <container_name>` / mysqladmin ping resolves.
        - postgres: pg_isready wait → pg_restore (custom) or psql (plain)
+       - mysql/mariadb: mysqladmin ping → mysql < gunzip(dump.sql.gz)
        - sqlite:   move existing file aside → gunzip | sqlite3 newdb
 
 Flags:
@@ -20,6 +21,7 @@ Flags:
   --skip-db       : restore files + compose only, skip DB dumps
   --db-only       : restore DB dumps only, skip files and compose
   --remap-owner U:G : override ownership during file restore
+  --dry-run       : print planned actions, don't apply
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from pathlib import Path
 import structlog
 
 from .config import Config
+from .targets.postgres import _pg_binary, _pg_version_installed, KNOWN_PG_MAJORS
 from .utils import run_subprocess
 
 log = structlog.get_logger(__name__)
@@ -55,19 +58,19 @@ def restore_archive(
     skip_db: bool = False,
     db_only: bool = False,
     remap_owner: tuple[int, int] | None = None,
+    dry_run: bool = False,
 ) -> None:
     """Restore a UniGrandBackup archive. See module docstring."""
     if skip_db and db_only:
         raise RuntimeError("--skip-db and --db-only are mutually exclusive")
 
-    log.info("restore_start", archive=str(archive))
+    log.info("restore_start", archive=str(archive), dry_run=dry_run)
 
     extract_root = Path(tempfile.mkdtemp(prefix="ugb-restore-"))
     try:
         with tarfile.open(archive, "r:gz") as tar:
             tar.extractall(extract_root, filter="data")
 
-        # Archive has a single top-level dir: <service>-<stamp>/
         children = [p for p in extract_root.iterdir() if p.is_dir()]
         if len(children) != 1:
             raise RuntimeError(
@@ -99,7 +102,16 @@ def restore_archive(
                 if not src.exists():
                     log.warning("restore_entry_missing", archive_path=entry["archive_path"])
                     continue
-                _restore_one_path(src, dest, entry, force=force, remap_owner=remap_owner)
+                if dry_run:
+                    log.info(
+                        "dry_run_would_restore_file",
+                        dest=str(dest),
+                        kind=entry.get("kind", "?"),
+                        owner=entry.get("owner", {}),
+                        mode=entry.get("mode", "?"),
+                    )
+                else:
+                    _restore_one_path(src, dest, entry, force=force, remap_owner=remap_owner)
                 restored_sources.append(dest)
 
         # --- 2. docker compose up (if compose file restored) ---
@@ -109,17 +121,30 @@ def restore_archive(
                 log.info("restore_compose_skipped")
             else:
                 log.info("restore_compose_up", dir=str(compose_dir))
-                _docker_compose_up(compose_dir)
-                log.info("restore_compose_done")
+                if dry_run:
+                    log.info("dry_run_would_compose_up", dir=str(compose_dir))
+                else:
+                    _docker_compose_up(compose_dir)
+                    log.info("restore_compose_done")
 
         # --- 3. Databases ---
         if not skip_db:
             db_entries: list[dict] = manifest.get("contents", {}).get("databases", []) or []
             for db in db_entries:
                 kind = db.get("kind")
+                if dry_run:
+                    log.info(
+                        "dry_run_would_restore_db",
+                        kind=kind,
+                        database=db.get("database") or db.get("source_path"),
+                        host=db.get("host"),
+                    )
+                    continue
                 try:
                     if kind == "postgres":
                         _restore_postgres(db, archive_root, force=force)
+                    elif kind in ("mysql", "mariadb"):
+                        _restore_mysql(db, archive_root, force=force)
                     elif kind == "sqlite":
                         _restore_sqlite(db, archive_root, force=force)
                     else:
@@ -174,12 +199,7 @@ def _apply_owner_and_mode(
     *,
     remap_owner: tuple[int, int] | None,
 ) -> None:
-    """Restore uid/gid + mode for dest tree, using manifest entry as source of truth.
-
-    Non-root processes silently skip chown (no permission). Mode is always applied
-    where possible. The recorded uid/gid is the SAME at every level of the tree
-    by design — we set it recursively for directories.
-    """
+    """Restore uid/gid + mode for dest tree, using manifest entry as source of truth."""
     owner = entry.get("owner") or {}
     mode_str = entry.get("mode")
 
@@ -210,7 +230,6 @@ def _apply_owner_and_mode(
 
 
 def _chown_recursive(path: Path, uid: int, gid: int) -> None:
-    """Apply uid/gid to path and (if a directory) every child non-recursively safe."""
     os.lchown(path, uid, gid)
     if path.is_dir() and not path.is_symlink():
         for child in path.rglob("*"):
@@ -223,7 +242,6 @@ def _chown_recursive(path: Path, uid: int, gid: int) -> None:
 # ─── docker compose ───────────────────────────────────────────────────────────
 
 def _find_compose_dir(restored_sources: list[Path]) -> Path | None:
-    """Return the deepest dir among restored sources that contains a compose file."""
     candidates: set[Path] = set()
     for src in restored_sources:
         if src.is_dir():
@@ -246,13 +264,7 @@ def _find_compose_dir(restored_sources: list[Path]) -> Path | None:
 
 
 def _docker_compose_up(compose_dir: Path, timeout: int = 900) -> None:
-    """Stream `docker compose up -d` output to our log.
-
-    We use Popen + a reader thread instead of subprocess.run(capture_output=True)
-    because long-running builds (5+ min) with capture_output were intermittently
-    returning rc=1 in our subprocess wrapper while running cleanly when invoked
-    manually. Streaming keeps the OS pipes drained and surfaces full output.
-    """
+    """Stream `docker compose up -d` output to our log."""
     proc = subprocess.Popen(
         ["docker", "compose", "up", "-d", "--progress", "plain"],
         cwd=str(compose_dir),
@@ -293,7 +305,6 @@ def _docker_compose_up(compose_dir: Path, timeout: int = 900) -> None:
 # ─── Docker network discovery / auto-attach ──────────────────────────────────
 
 def _self_container_id() -> str:
-    """Inside a docker container, /etc/hostname holds the short container ID."""
     try:
         with open("/etc/hostname") as f:
             return f.read().strip()
@@ -302,7 +313,6 @@ def _self_container_id() -> str:
 
 
 def _container_networks(name_or_id: str) -> list[str]:
-    """List names of networks a container is attached to. Raises if not found."""
     result = run_subprocess(
         ["docker", "inspect", name_or_id, "-f", "{{json .NetworkSettings.Networks}}"],
         timeout=30,
@@ -319,14 +329,7 @@ def _container_networks(name_or_id: str) -> list[str]:
 
 
 def _attach_self_to_container_networks(target_container: str) -> list[str]:
-    """Attach our own container to all networks of target_container.
-
-    This is the fix for the chicken-and-egg problem where `docker compose up`
-    creates a fresh network containing the DB container, but our restore
-    container was started earlier on a different network and can't resolve
-    the DB by container name. After this call, `pg_isready -h <db_host>`
-    works because we share the network namespace.
-    """
+    """Attach our own container to all networks of target_container."""
     try:
         self_id = _self_container_id()
         target_nets = _container_networks(target_container)
@@ -357,14 +360,47 @@ def _attach_self_to_container_networks(target_container: str) -> list[str]:
 
 # ─── Postgres restore ─────────────────────────────────────────────────────────
 
-def _pg_isready(host: str, port: int, user: str, database: str, timeout: int = 120) -> None:
-    """Block until pg_isready succeeds. Raises after timeout."""
+def _resolve_pg_restore_major(manifest_db: dict) -> str | None:
+    """Pick pg-client major for restore.
+
+    Prefer the version recorded in the manifest (`client_version_used`).
+    If not installed in this image (rare — image was downgraded), fall back
+    to the closest >= version we have. As a last resort, default PATH.
+    """
+    pinned = manifest_db.get("client_version_used")
+    if pinned and _pg_version_installed(pinned):
+        return pinned
+    if pinned:
+        # Pick the smallest installed major >= pinned, else the newest.
+        ge = sorted(
+            (v for v in KNOWN_PG_MAJORS if _pg_version_installed(v) and int(v) >= int(pinned)),
+            key=int,
+        )
+        if ge:
+            log.info("restore_pg_client_fallback", wanted=pinned, using=ge[0])
+            return ge[0]
+        newest = max(
+            (v for v in KNOWN_PG_MAJORS if _pg_version_installed(v)),
+            key=int,
+            default=None,
+        )
+        if newest:
+            log.warning(
+                "restore_pg_client_downgrade",
+                wanted=pinned, using=newest,
+                note="restore may fail if dump format is newer than client",
+            )
+            return newest
+    return None  # PATH default (latest via pg_wrapper)
+
+
+def _pg_isready(host: str, port: int, user: str, database: str, *, binary: str, timeout: int = 120) -> None:
     log.info("restore_db_wait", host=host, port=port, database=database)
     deadline = time.time() + timeout
     last_err = ""
     while time.time() < deadline:
         result = run_subprocess(
-            ["pg_isready", "-h", host, "-p", str(port), "-U", user, "-d", database],
+            [binary, "-h", host, "-p", str(port), "-U", user, "-d", database],
             timeout=10,
         )
         if result.returncode == 0:
@@ -398,10 +434,14 @@ def _restore_postgres(db: dict, archive_root: Path, *, force: bool) -> None:
         )
 
     # Bridge into the DB container's docker network so DNS resolution works.
-    # Harmless no-op if we are already on it.
     _attach_self_to_container_networks(host)
 
-    _pg_isready(host, port, user, database, timeout=180)
+    client_major = _resolve_pg_restore_major(db)
+    pg_isready_bin = _pg_binary("pg_isready", client_major)
+    pg_restore_bin = _pg_binary("pg_restore", client_major)
+    psql_bin = _pg_binary("psql", client_major)
+
+    _pg_isready(host, port, user, database, binary=pg_isready_bin, timeout=180)
 
     sub_env = {"PGPASSWORD": password}
 
@@ -412,7 +452,7 @@ def _restore_postgres(db: dict, archive_root: Path, *, force: bool) -> None:
                 "Pass --force to proceed."
             )
         cmd = [
-            "pg_restore",
+            pg_restore_bin,
             "-h", host,
             "-p", str(port),
             "-U", user,
@@ -428,7 +468,7 @@ def _restore_postgres(db: dict, archive_root: Path, *, force: bool) -> None:
                 "Pass --force to proceed."
             )
         cmd = [
-            "psql",
+            psql_bin,
             "-h", host,
             "-p", str(port),
             "-U", user,
@@ -446,10 +486,100 @@ def _restore_postgres(db: dict, archive_root: Path, *, force: bool) -> None:
     log.info("restore_db_done", database=database)
 
 
+# ─── MySQL / MariaDB restore ─────────────────────────────────────────────────
+
+def _mysql_isready(
+    host: str, port: int, user: str, password: str, *, timeout: int = 180
+) -> None:
+    """Block until mysqladmin ping succeeds against host:port."""
+    log.info("restore_db_wait", host=host, port=port, database="?")
+    deadline = time.time() + timeout
+    last_err = ""
+    sub_env = {**os.environ, "MYSQL_PWD": password}
+    while time.time() < deadline:
+        result = run_subprocess(
+            ["mysqladmin",
+             f"--host={host}",
+             f"--port={port}",
+             f"--user={user}",
+             "ping"],
+            env={"MYSQL_PWD": password},
+            timeout=10,
+        )
+        if result.returncode == 0:
+            log.info("restore_db_ready", database="?")
+            return
+        last_err = (result.stderr or result.stdout or "").strip()
+        time.sleep(2)
+    raise RuntimeError(
+        f"Timed out waiting for mysql {host}:{port} ({timeout}s). Last error: {last_err}"
+    )
+
+
+def _restore_mysql(db: dict, archive_root: Path, *, force: bool) -> None:
+    """Pipe gunzip(dump.sql.gz) → mysql client to restore the database."""
+    host = db["host"]
+    port = int(db.get("port", 3306))
+    user = db["user"]
+    database = db["database"]
+    password_env = db.get("password_env", "")
+
+    dump_path = archive_root / db["archive_path"]
+    if not dump_path.is_file():
+        raise RuntimeError(f"MySQL/MariaDB dump not found: {db['archive_path']}")
+
+    password = os.environ.get(password_env, "") if password_env else ""
+    if not password:
+        raise RuntimeError(
+            f"MySQL/MariaDB password env '{password_env}' is empty or unset. "
+            "Set it in .env so restore can authenticate."
+        )
+
+    if not force:
+        raise RuntimeError(
+            f"Restore will overwrite contents of database '{database}'. "
+            "Pass --force to proceed."
+        )
+
+    _attach_self_to_container_networks(host)
+    _mysql_isready(host, port, user, password, timeout=180)
+
+    sub_env = {**os.environ, "MYSQL_PWD": password}
+
+    proc = subprocess.Popen(
+        ["mysql",
+         f"--host={host}",
+         f"--port={port}",
+         f"--user={user}",
+         database],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=sub_env,
+    )
+
+    try:
+        assert proc.stdin is not None
+        with gzip.open(dump_path, "rb") as fh:
+            shutil.copyfileobj(fh, proc.stdin)
+        proc.stdin.close()
+        stdout, stderr = proc.communicate(timeout=3600)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise RuntimeError(f"mysql restore timed out for {database}") from None
+
+    if proc.returncode != 0:
+        err = (stderr.decode("utf-8", "replace") if isinstance(stderr, bytes) else stderr or "")
+        raise RuntimeError(
+            f"mysql restore failed (rc={proc.returncode}) for {database}: "
+            f"{err.strip()[:500]}"
+        )
+    log.info("restore_db_done", database=database)
+
+
 # ─── SQLite restore ───────────────────────────────────────────────────────────
 
 def _restore_sqlite(db: dict, archive_root: Path, *, force: bool) -> None:
-    """Restore SQLite by running gunzip | sqlite3 onto the original path."""
     source_path = Path(db["source_path"])
     archive_dump = archive_root / db["archive_path"]
     if not archive_dump.is_file():

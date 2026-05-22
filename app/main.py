@@ -174,7 +174,28 @@ def _run_daemon(config: Config) -> int:
     return 0
 
 
-def _run_restore(config: Config, archive: Path, force: bool, no_compose: bool) -> int:
+def _parse_remap_owner(value: str | None) -> tuple[int, int] | None:
+    """Parse '--remap-owner UID:GID' value. Raises ValueError on bad input."""
+    if not value:
+        return None
+    try:
+        uid_str, gid_str = value.split(":", 1)
+        return (int(uid_str), int(gid_str))
+    except (ValueError, AttributeError) as e:
+        raise ValueError(
+            f"--remap-owner must be UID:GID with integer values (e.g. 1000:1000), got {value!r}"
+        ) from e
+
+
+def _run_restore(
+    config: Config,
+    archive: Path,
+    force: bool,
+    no_compose: bool,
+    skip_db: bool,
+    db_only: bool,
+    remap_owner: str | None,
+) -> int:
     """Delegated to restore.py so that the import is lazy."""
     from .restore import restore_archive
 
@@ -185,7 +206,20 @@ def _run_restore(config: Config, archive: Path, force: bool, no_compose: bool) -
         )
         return 2
     try:
-        restore_archive(config, archive, force=force, run_compose=not no_compose)
+        remap = _parse_remap_owner(remap_owner)
+    except ValueError as e:
+        print(f"FATAL: {e}", file=sys.stderr)
+        return 2
+    try:
+        restore_archive(
+            config,
+            archive,
+            force=force,
+            run_compose=not no_compose,
+            skip_db=skip_db,
+            db_only=db_only,
+            remap_owner=remap,
+        )
         return 0
     except Exception as e:
         log.error("restore_failed", archive=str(archive), error=str(e), exc_info=True)
@@ -218,6 +252,22 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="don't auto-run 'docker compose up' even if compose file is in archive",
     )
+    p_restore.add_argument(
+        "--skip-db",
+        action="store_true",
+        help="restore files + compose only; skip database dump replay",
+    )
+    p_restore.add_argument(
+        "--db-only",
+        action="store_true",
+        help="restore database dumps only; skip files and compose-up",
+    )
+    p_restore.add_argument(
+        "--remap-owner",
+        metavar="UID:GID",
+        help="override file ownership during restore (e.g. --remap-owner 1000:1000); "
+             "default: preserve uid/gid recorded in manifest",
+    )
 
     args = parser.parse_args(argv)
     cmd = args.cmd or "daemon"
@@ -245,7 +295,15 @@ def main(argv: list[str] | None = None) -> int:
         return _run_one(config, args.name)
     if cmd == "restore":
         _print_banner(config)
-        return _run_restore(config, args.archive, force=args.force, no_compose=args.no_compose)
+        return _run_restore(
+            config,
+            args.archive,
+            force=args.force,
+            no_compose=args.no_compose,
+            skip_db=args.skip_db,
+            db_only=args.db_only,
+            remap_owner=args.remap_owner,
+        )
     _print_banner(config)
     return _run_daemon(config)
 

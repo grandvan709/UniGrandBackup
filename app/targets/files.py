@@ -11,10 +11,41 @@ import structlog
 log = structlog.get_logger(__name__)
 
 
+class OwnerInfo(TypedDict, total=False):
+    uid: int
+    gid: int
+    user: str | None
+    group: str | None
+
+
 class FileEntry(TypedDict):
     source: str         # original absolute path on host
     archive_path: str   # path inside archive (relative)
     kind: str           # "file" | "dir"
+    owner: OwnerInfo    # uid/gid + symbolic names if resolvable
+    mode: str           # octal string like "0755"
+
+
+def _read_owner(path: Path) -> OwnerInfo:
+    """Read uid/gid + try to resolve symbolic user/group names. Best-effort."""
+    st = path.lstat()
+    info: OwnerInfo = {"uid": st.st_uid, "gid": st.st_gid, "user": None, "group": None}
+    try:
+        import pwd
+        info["user"] = pwd.getpwuid(st.st_uid).pw_name
+    except (KeyError, ImportError, OSError):
+        pass
+    try:
+        import grp
+        info["group"] = grp.getgrgid(st.st_gid).gr_name
+    except (KeyError, ImportError, OSError):
+        pass
+    return info
+
+
+def _read_mode(path: Path) -> str:
+    """Permission bits as a 4-digit octal string (e.g. '0755')."""
+    return format(path.lstat().st_mode & 0o7777, "04o")
 
 
 def _make_exclude_matcher(src_root: Path, patterns: list[str]):
@@ -55,7 +86,9 @@ def backup_paths(
     """Copy each path into staging_dir/files/<path.name>.
 
     Returns a list of FileEntry dicts describing what was actually copied
-    (skips non-existing entries). The entries are used to build the manifest.
+    (skips non-existing entries). Each entry records the source owner (uid/gid)
+    and mode bits so `restore` can put them back exactly as they were on the
+    original host.
 
     `exclude_patterns` — glob-style patterns matched against paths RELATIVE
     to each source root. Use '**' for recursive wildcards (e.g. '**/.git',
@@ -85,6 +118,8 @@ def backup_paths(
                 "source": str(src),
                 "archive_path": f"files/{src.name}",
                 "kind": kind,
+                "owner": _read_owner(src),
+                "mode": _read_mode(src),
             })
             log.debug("path_copied", source=str(src), dest=str(dest))
         except Exception as e:

@@ -200,6 +200,34 @@ LOG_MESSAGES: dict[str, dict[Lang, str]] = {
         "ru": "Восстановление завершено: '{service}'",
         "en": "Restore completed: '{service}'",
     },
+    "restore_failed": {
+        "ru": "Восстановление провалено: {archive} — {error}",
+        "en": "Restore failed: {archive} — {error}",
+    },
+    "restore_entry_missing": {
+        "ru": "Запись из манифеста не найдена в архиве: {archive_path}",
+        "en": "Manifest entry not present in archive: {archive_path}",
+    },
+    "restore_network_attached": {
+        "ru": "Подключился к docker-сети '{network}' (вместе с {target})",
+        "en": "Attached to docker network '{network}' (alongside {target})",
+    },
+    "restore_network_attach_failed": {
+        "ru": "Не удалось подключиться к сети '{network}': {error}",
+        "en": "Failed to attach to network '{network}': {error}",
+    },
+    "restore_network_inspect_failed": {
+        "ru": "Не удалось осмотреть контейнер '{target}': {error}",
+        "en": "Failed to inspect container '{target}': {error}",
+    },
+    "restore_chown_failed": {
+        "ru": "Не удалось сменить владельца: {dest} — {error}",
+        "en": "chown failed: {dest} — {error}",
+    },
+    "restore_chmod_failed": {
+        "ru": "Не удалось выставить mode: {dest} — {error}",
+        "en": "chmod failed: {dest} — {error}",
+    },
 }
 
 

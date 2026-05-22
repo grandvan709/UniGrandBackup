@@ -316,20 +316,58 @@ sudo docker compose --profile restore run --rm unigrandbackup-restore \
 |:---:|:---|
 | `--force` | Перезаписать существующие файлы и контент БД без подтверждения. **Обязателен**, если что-то по целевым путям уже существует. |
 | `--no-compose` | Не запускать `docker compose up -d`, даже если в архиве найден `docker-compose.yml`. Полезно, если контейнеры уже подняты. |
+| `--skip-db` | Восстановить только файлы + compose, **не** трогать БД. Удобно когда хочешь сначала разобраться с приложением, а БД залить отдельно. |
+| `--db-only` | Восстановить **только** БД-дампы; не трогать файлы и не запускать compose. Полезно если файлы уже на хосте, БД нужно подменить. |
+| `--remap-owner UID:GID` | Переназначить владельца восстанавливаемых файлов (по умолчанию uid/gid берётся из манифеста). Пример: `--remap-owner 1000:1000`. |
 
 Логика работы:
 
 1. Распаковка архива во временную директорию.
-2. Чтение `manifest.json` — содержит схему `unigrandbackup-1`, имя сервиса, дату, описание содержимого.
-3. Восстановление файлов в **исходные абсолютные пути** на хосте (так, как они были при бэкапе).
-4. Поиск `docker-compose.yml` среди восстановленных файлов и `docker compose up -d` (можно отключить `--no-compose`).
-5. Ожидание готовности БД через `pg_isready` (для Postgres).
-6. Заливка дампа:
+2. Чтение `manifest.json` — содержит схему `unigrandbackup-1`, имя сервиса, дату, описание содержимого, **uid/gid/mode** каждого пути.
+3. Восстановление файлов в **исходные абсолютные пути** на хосте, с сохранением `uid`/`gid`/`mode` из манифеста (если запущены как root, что верно внутри docker-контейнера).
+4. Поиск `docker-compose.yml` среди восстановленных файлов и `docker compose up -d` (можно отключить `--no-compose`). Вывод docker compose стримится в наши логи (видны прогресс билда / pull в real-time).
+5. **Auto-attach к docker-сети БД-контейнера** — restore сам подключается к свежесозданным docker-сетям БД, чтобы `pg_isready -h <container_name>` мог резолвить имя.
+6. Ожидание готовности БД через `pg_isready` (для Postgres).
+7. Заливка дампа:
    - **Postgres custom-format** → `pg_restore --clean --if-exists --no-owner --no-acl`
    - **Postgres plain** → `psql -v ON_ERROR_STOP=1 -f`
    - **SQLite** → существующий файл переименовывается в `*.bak.<timestamp>`, дамп заливается заново через `sqlite3`
 
 > 💡 Чтобы автоматический подъём compose сработал — добавь `docker-compose.yml` (или весь корень сервиса) в `services[].paths` сервиса.
+
+### 🛠 Troubleshooting
+
+**1. `permission denied` или `EACCES` при старте приложения после рестора**
+
+Случай редкий, но встречается: bind-mount директория (например `./data` или `./logs`) была создана docker'ом как `root:root`, а приложение внутри контейнера работает под uid 1000 (`app`, `node`). В манифесте мы храним и восстанавливаем uid/gid, но если на новом хосте маппинг другой — поможет `--remap-owner`:
+
+```bash
+sudo docker compose --profile restore run --rm unigrandbackup-restore \
+        /var/backups/myapp/myapp-20260520-030000.tar.gz \
+        --force --remap-owner 1000:1000
+```
+
+Или после рестора руками: `sudo chown -R 1000:1000 /opt/myapp/data /opt/myapp/logs`.
+
+**2. `pg_restore: error: unsupported version (1.16) in file header`**
+
+Это значит дамп сделан клиентом более новой версии, чем тот pg_restore, которым ты пытаешься заливать. UniGrandBackup делает дамп через `pg_dump 17` из своего образа; если бэкапаемый сервер постарше (PG 15), а на новом хосте ты пытаешься залить через **локальный** pg_restore 15 — провалится.
+
+Способы:
+- Использовать наш restore (`docker compose --profile restore run ...`) — там pg_restore 17, читает все старые форматы.
+- Или вручную: `docker run --rm --network <db_net> -e PGPASSWORD=... -v /dump:/dump:ro postgres:17-alpine pg_restore ...` (postgres:17 поймёт format 1.16).
+
+**3. `pg_isready` падает таймаутом (`no response`)**
+
+Если на свежем хосте restore проходит compose-up, но потом виснет на `pg_isready` 180 секунд и отваливается — `restore_network_attached` лог должен показывать что мы подключились к сети БД. Если его нет — проверь:
+- `docker.sock` смонтирован в restore-контейнер (см. `docker-compose.yml`)?
+- Docker CLI работает внутри: `docker ps` из restore-контейнера должен показывать список.
+
+**4. Бэкап слишком большой для Telegram (>50 MB)**
+
+Telegram bots не принимают файлы >50 MB. Способы:
+- Подобрать `paths_exclude` агрессивнее (особенно `**/.git`, `**/node_modules`, `**/pgdata` для postgres bind-mounts).
+- Локальная копия в `/var/backups/<service>/` всё равно сохранится — отправка в Telegram опциональна.
 
 ### Ручное восстановление (если нужно вытащить отдельные части)
 

@@ -105,8 +105,19 @@ def _make_pretty_renderer(use_color: bool):
         if exc_info:
             import traceback
 
-            tb = "".join(traceback.format_exception(*exc_info)) if isinstance(exc_info, tuple) else str(exc_info)
-            line += "\n" + tb.rstrip()
+            tb: str | None = None
+            if isinstance(exc_info, tuple) and len(exc_info) == 3:
+                # Canonical (type, value, traceback) tuple — printable.
+                tb = "".join(traceback.format_exception(*exc_info))
+            elif isinstance(exc_info, BaseException):
+                tb = "".join(traceback.format_exception(
+                    type(exc_info), exc_info, exc_info.__traceback__
+                ))
+            # else: bare True/False or other junk left by a processor — skip
+            #       silently rather than rendering 'True' literal that confused
+            #       a previous release.
+            if tb:
+                line += "\n" + tb.rstrip()
         if stack_info:
             line += "\n" + str(stack_info).rstrip()
         return line

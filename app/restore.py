@@ -3,14 +3,23 @@
 Flow:
   1. Extract <archive>.tar.gz into a temp directory.
   2. Read manifest.json (format unigrandbackup-1).
-  3. Restore each `files/*` entry back to its original absolute path on host.
-     If the destination exists, refuse unless --force was passed.
+  3. Restore each `files/*` entry back to its original absolute path on host,
+     preserving uid/gid/mode recorded in the manifest (when running as root).
   4. If the archive contains docker-compose.yml (somewhere under restored
-     paths) and --no-compose was NOT passed, run `docker compose up -d`
-     in that directory. Requires docker CLI + /var/run/docker.sock mount.
+     paths) and --no-compose was NOT passed, stream `docker compose up -d`
+     output to our log. Requires docker CLI + /var/run/docker.sock mount.
   5. For each database in manifest:
+       - Auto-attach our container to the DB container's docker networks so
+         `pg_isready -h <container_name>` can resolve.
        - postgres: pg_isready wait → pg_restore (custom) or psql (plain)
        - sqlite:   move existing file aside → gunzip | sqlite3 newdb
+
+Flags:
+  --force         : overwrite existing files/DB without confirmation
+  --no-compose    : don't auto-run `docker compose up`
+  --skip-db       : restore files + compose only, skip DB dumps
+  --db-only       : restore DB dumps only, skip files and compose
+  --remap-owner U:G : override ownership during file restore
 """
 
 from __future__ import annotations
@@ -22,6 +31,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -42,8 +52,14 @@ def restore_archive(
     *,
     force: bool = False,
     run_compose: bool = True,
+    skip_db: bool = False,
+    db_only: bool = False,
+    remap_owner: tuple[int, int] | None = None,
 ) -> None:
     """Restore a UniGrandBackup archive. See module docstring."""
+    if skip_db and db_only:
+        raise RuntimeError("--skip-db and --db-only are mutually exclusive")
+
     log.info("restore_start", archive=str(archive))
 
     extract_root = Path(tempfile.mkdtemp(prefix="ugb-restore-"))
@@ -62,7 +78,7 @@ def restore_archive(
         manifest_path = archive_root / "manifest.json"
         if not manifest_path.is_file():
             raise RuntimeError(
-                f"manifest.json not found in archive — is this an UniGrandBackup archive?"
+                "manifest.json not found in archive — is this an UniGrandBackup archive?"
             )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         service = manifest.get("service", "?")
@@ -75,7 +91,7 @@ def restore_archive(
         # --- 1. Files ---
         restored_sources: list[Path] = []
         files_entries: list[dict] = manifest.get("contents", {}).get("files", []) or []
-        if files_entries:
+        if not db_only and files_entries:
             log.info("restore_files_start")
             for entry in files_entries:
                 src = archive_root / entry["archive_path"]
@@ -83,12 +99,11 @@ def restore_archive(
                 if not src.exists():
                     log.warning("restore_entry_missing", archive_path=entry["archive_path"])
                     continue
-                _restore_one_path(src, dest, force=force)
+                _restore_one_path(src, dest, entry, force=force, remap_owner=remap_owner)
                 restored_sources.append(dest)
 
         # --- 2. docker compose up (if compose file restored) ---
-        compose_dir: Path | None = None
-        if run_compose:
+        if not db_only and run_compose:
             compose_dir = _find_compose_dir(restored_sources)
             if compose_dir is None:
                 log.info("restore_compose_skipped")
@@ -98,20 +113,21 @@ def restore_archive(
                 log.info("restore_compose_done")
 
         # --- 3. Databases ---
-        db_entries: list[dict] = manifest.get("contents", {}).get("databases", []) or []
-        for db in db_entries:
-            kind = db.get("kind")
-            try:
-                if kind == "postgres":
-                    _restore_postgres(db, archive_root, force=force)
-                elif kind == "sqlite":
-                    _restore_sqlite(db, archive_root, force=force)
-                else:
-                    log.warning("restore_db_unknown_kind", kind=kind)
-            except Exception as e:
-                name = db.get("database") or db.get("source_path") or "?"
-                log.error("restore_db_failed", database=name, error=str(e))
-                raise
+        if not skip_db:
+            db_entries: list[dict] = manifest.get("contents", {}).get("databases", []) or []
+            for db in db_entries:
+                kind = db.get("kind")
+                try:
+                    if kind == "postgres":
+                        _restore_postgres(db, archive_root, force=force)
+                    elif kind == "sqlite":
+                        _restore_sqlite(db, archive_root, force=force)
+                    else:
+                        log.warning("restore_db_unknown_kind", kind=kind)
+                except Exception as e:
+                    name = db.get("database") or db.get("source_path") or "?"
+                    log.error("restore_db_failed", database=name, error=str(e))
+                    raise
 
         log.info("restore_done", service=service)
 
@@ -121,8 +137,15 @@ def restore_archive(
 
 # ─── Files ────────────────────────────────────────────────────────────────────
 
-def _restore_one_path(src: Path, dest: Path, *, force: bool) -> None:
-    """Copy src (file or directory from extracted archive) onto dest (host)."""
+def _restore_one_path(
+    src: Path,
+    dest: Path,
+    entry: dict,
+    *,
+    force: bool,
+    remap_owner: tuple[int, int] | None,
+) -> None:
+    """Copy src → dest, then restore ownership + mode recorded in `entry`."""
     if dest.exists():
         if not force:
             log.warning("restore_file_skipped", dest=str(dest))
@@ -140,7 +163,61 @@ def _restore_one_path(src: Path, dest: Path, *, force: bool) -> None:
         shutil.copytree(src, dest, symlinks=True)
     else:
         shutil.copy2(src, dest, follow_symlinks=False)
+
+    _apply_owner_and_mode(dest, entry, remap_owner=remap_owner)
     log.info("restore_file_done", dest=str(dest))
+
+
+def _apply_owner_and_mode(
+    dest: Path,
+    entry: dict,
+    *,
+    remap_owner: tuple[int, int] | None,
+) -> None:
+    """Restore uid/gid + mode for dest tree, using manifest entry as source of truth.
+
+    Non-root processes silently skip chown (no permission). Mode is always applied
+    where possible. The recorded uid/gid is the SAME at every level of the tree
+    by design — we set it recursively for directories.
+    """
+    owner = entry.get("owner") or {}
+    mode_str = entry.get("mode")
+
+    uid: int | None = None
+    gid: int | None = None
+    if remap_owner is not None:
+        uid, gid = remap_owner
+    else:
+        uid = owner.get("uid") if isinstance(owner.get("uid"), int) else None
+        gid = owner.get("gid") if isinstance(owner.get("gid"), int) else None
+
+    can_chown = (uid is not None and gid is not None and os.geteuid() == 0)
+
+    if can_chown:
+        try:
+            _chown_recursive(dest, uid, gid)
+            log.debug("restore_owner_set", dest=str(dest), uid=uid, gid=gid)
+        except OSError as e:
+            log.warning("restore_chown_failed", dest=str(dest), error=str(e))
+    elif uid is not None and os.geteuid() != 0:
+        log.debug("restore_chown_skipped_not_root", dest=str(dest))
+
+    if mode_str:
+        try:
+            os.chmod(dest, int(mode_str, 8))
+        except (ValueError, OSError) as e:
+            log.warning("restore_chmod_failed", dest=str(dest), error=str(e))
+
+
+def _chown_recursive(path: Path, uid: int, gid: int) -> None:
+    """Apply uid/gid to path and (if a directory) every child non-recursively safe."""
+    os.lchown(path, uid, gid)
+    if path.is_dir() and not path.is_symlink():
+        for child in path.rglob("*"):
+            try:
+                os.lchown(child, uid, gid)
+            except OSError as e:
+                log.warning("restore_chown_failed", path=str(child), error=str(e))
 
 
 # ─── docker compose ───────────────────────────────────────────────────────────
@@ -152,7 +229,6 @@ def _find_compose_dir(restored_sources: list[Path]) -> Path | None:
         if src.is_dir():
             candidates.add(src)
         candidates.add(src.parent)
-        # also include grandparent — backups sometimes restore just .env into /opt/app/
         candidates.add(src.parent.parent)
 
     found: list[Path] = []
@@ -166,22 +242,117 @@ def _find_compose_dir(restored_sources: list[Path]) -> Path | None:
 
     if not found:
         return None
-    # deepest match wins (most specific)
     return max(found, key=lambda p: len(p.parts))
 
 
-def _docker_compose_up(compose_dir: Path) -> None:
-    """Run `docker compose up -d` inside compose_dir. Requires docker.sock + docker CLI."""
+def _docker_compose_up(compose_dir: Path, timeout: int = 900) -> None:
+    """Stream `docker compose up -d` output to our log.
+
+    We use Popen + a reader thread instead of subprocess.run(capture_output=True)
+    because long-running builds (5+ min) with capture_output were intermittently
+    returning rc=1 in our subprocess wrapper while running cleanly when invoked
+    manually. Streaming keeps the OS pipes drained and surfaces full output.
+    """
+    proc = subprocess.Popen(
+        ["docker", "compose", "up", "-d", "--progress", "plain"],
+        cwd=str(compose_dir),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    output_lines: list[str] = []
+
+    def reader() -> None:
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            line = raw.rstrip()
+            if line:
+                output_lines.append(line)
+                log.debug("compose_output", line=line)
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise RuntimeError(f"docker compose up timed out after {timeout}s")
+    t.join(timeout=5)
+
+    if proc.returncode != 0:
+        tail = "\n".join(output_lines[-100:])
+        raise RuntimeError(
+            f"docker compose up failed (rc={proc.returncode}).\n"
+            f"Last 100 lines of output:\n{tail}"
+        )
+
+
+# ─── Docker network discovery / auto-attach ──────────────────────────────────
+
+def _self_container_id() -> str:
+    """Inside a docker container, /etc/hostname holds the short container ID."""
+    try:
+        with open("/etc/hostname") as f:
+            return f.read().strip()
+    except OSError as e:
+        raise RuntimeError(f"Could not read /etc/hostname: {e}") from e
+
+
+def _container_networks(name_or_id: str) -> list[str]:
+    """List names of networks a container is attached to. Raises if not found."""
     result = run_subprocess(
-        ["docker", "compose", "up", "-d"],
-        cwd=compose_dir,
-        timeout=600,
+        ["docker", "inspect", name_or_id, "-f", "{{json .NetworkSettings.Networks}}"],
+        timeout=30,
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"docker compose up failed (rc={result.returncode}): "
-            f"{(result.stderr or result.stdout or '').strip()[:500]}"
+            f"docker inspect {name_or_id} failed: {(result.stderr or '').strip()[:300]}"
         )
+    try:
+        networks_obj = json.loads(result.stdout.strip() or "{}")
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Bad JSON from docker inspect: {e}") from e
+    return list(networks_obj.keys()) if isinstance(networks_obj, dict) else []
+
+
+def _attach_self_to_container_networks(target_container: str) -> list[str]:
+    """Attach our own container to all networks of target_container.
+
+    This is the fix for the chicken-and-egg problem where `docker compose up`
+    creates a fresh network containing the DB container, but our restore
+    container was started earlier on a different network and can't resolve
+    the DB by container name. After this call, `pg_isready -h <db_host>`
+    works because we share the network namespace.
+    """
+    try:
+        self_id = _self_container_id()
+        target_nets = _container_networks(target_container)
+        own_nets = set(_container_networks(self_id))
+    except RuntimeError as e:
+        log.warning("restore_network_inspect_failed", target=target_container, error=str(e))
+        return []
+
+    attached: list[str] = []
+    for net in target_nets:
+        if net in own_nets:
+            continue
+        result = run_subprocess(
+            ["docker", "network", "connect", net, self_id],
+            timeout=30,
+        )
+        if result.returncode == 0:
+            attached.append(net)
+            log.info("restore_network_attached", network=net, target=target_container)
+        else:
+            log.warning(
+                "restore_network_attach_failed",
+                network=net,
+                error=(result.stderr or "").strip()[:300],
+            )
+    return attached
 
 
 # ─── Postgres restore ─────────────────────────────────────────────────────────
@@ -226,13 +397,15 @@ def _restore_postgres(db: dict, archive_root: Path, *, force: bool) -> None:
             "Set it in .env so restore can authenticate."
         )
 
+    # Bridge into the DB container's docker network so DNS resolution works.
+    # Harmless no-op if we are already on it.
+    _attach_self_to_container_networks(host)
+
     _pg_isready(host, port, user, database, timeout=180)
 
     sub_env = {"PGPASSWORD": password}
 
     if fmt == "custom":
-        # pg_restore --clean --if-exists works even if the DB already has data.
-        # Without --force we still require it for safety.
         if not force:
             raise RuntimeError(
                 f"Restore will overwrite contents of database '{database}'. "
@@ -266,8 +439,6 @@ def _restore_postgres(db: dict, archive_root: Path, *, force: bool) -> None:
 
     result = run_subprocess(cmd, env=sub_env, timeout=3600)
     if result.returncode != 0:
-        # pg_restore prints lots of harmless "errors ignored on restore" — log
-        # the full body so the user can decide if it actually failed.
         raise RuntimeError(
             f"pg_restore/psql failed (rc={result.returncode}) for {database}: "
             f"{(result.stderr or '').strip()[:1000]}"
@@ -289,13 +460,11 @@ def _restore_sqlite(db: dict, archive_root: Path, *, force: bool) -> None:
             raise RuntimeError(
                 f"SQLite file already exists at {source_path}. Pass --force to overwrite."
             )
-        # Move aside as .bak.<timestamp> just in case.
         backup = source_path.with_suffix(source_path.suffix + f".bak.{int(time.time())}")
         source_path.rename(backup)
         log.info("restore_sqlite_existing_moved", original=str(source_path), backup=str(backup))
 
     source_path.parent.mkdir(parents=True, exist_ok=True)
-    # Pipe: `gunzip -c <archive_dump> | sqlite3 <source_path>`
     sqlite_proc = subprocess.Popen(
         ["sqlite3", str(source_path)],
         stdin=subprocess.PIPE,

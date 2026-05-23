@@ -265,8 +265,11 @@ def _find_compose_dir(restored_sources: list[Path]) -> Path | None:
 
 def _docker_compose_up(compose_dir: Path, timeout: int = 900) -> None:
     """Stream `docker compose up -d` output to our log."""
+    # We intentionally don't pass `--progress plain`. That flag is top-level
+    # (must come BEFORE `up`), and docker compose auto-selects plain output
+    # anyway when stdout is a pipe (which it is — we capture via Popen).
     proc = subprocess.Popen(
-        ["docker", "compose", "up", "-d", "--progress", "plain"],
+        ["docker", "compose", "up", "-d"],
         cwd=str(compose_dir),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

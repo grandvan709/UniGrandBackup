@@ -1,9 +1,9 @@
 <h1 align=center><code>UniGrandBackup</code></h1>
 
 <p align="center">
-  <a href="./README.md"><img src="https://flagcdn.com/24x18/gb.png" width="24" height="18" alt="EN">&nbsp;English</a>
+  <a href="./README.md"><img src="https://flagcdn.com/24x18/gb.png" height="14" alt="EN">&nbsp;English</a>
   &nbsp;·&nbsp;
-  <img src="https://flagcdn.com/24x18/ru.png" width="24" height="18" alt="RU">&nbsp;<b>Русский</b>
+  <img src="https://flagcdn.com/24x18/ru.png" height="14" alt="RU">&nbsp;<b>Русский</b>
 </p>
 
 > Универсальный Docker-контейнер для регулярного бэкапа любого количества сервисов на одном Linux-сервере. Файлы + базы данных → локальная ротация N последних копий + автоматическая отправка свежей копии в Telegram-топик.

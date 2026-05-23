@@ -69,7 +69,10 @@ def restore_archive(
     extract_root = Path(tempfile.mkdtemp(prefix="ugb-restore-"))
     try:
         with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(extract_root, filter="data")
+            # `fully_trusted` preserves per-file uid/gid stored in the tar
+            # header (otherwise the default 'data' filter strips ownership
+            # to the current process uid). We trust our own archives.
+            tar.extractall(extract_root, filter="fully_trusted")
 
         children = [p for p in extract_root.iterdir() if p.is_dir()]
         if len(children) != 1:
@@ -170,7 +173,12 @@ def _restore_one_path(
     force: bool,
     remap_owner: tuple[int, int] | None,
 ) -> None:
-    """Copy src → dest, then restore ownership + mode recorded in `entry`."""
+    """Copy src → dest preserving per-file uid/gid/mode from the source tree.
+
+    The source tree lives in our temp extract dir; tarfile.extractall with
+    `filter='fully_trusted'` already stamped each file with its original
+    uid/gid/mode from the tar header. We just mirror those onto dest.
+    """
     if dest.exists():
         if not force:
             log.warning("restore_file_skipped", dest=str(dest))
@@ -184,59 +192,90 @@ def _restore_one_path(
             dest.unlink()
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if src.is_dir():
-        shutil.copytree(src, dest, symlinks=True)
+    can_chown = os.geteuid() == 0
+    if not can_chown and remap_owner is None:
+        log.debug("restore_chown_skipped_not_root", dest=str(dest))
+
+    if src.is_dir() and not src.is_symlink():
+        # Walk source tree manually so we can chown each item individually.
+        _copy_tree_preserving_meta(src, dest, can_chown=can_chown, remap_owner=remap_owner)
     else:
         shutil.copy2(src, dest, follow_symlinks=False)
+        _apply_meta(src, dest, can_chown=can_chown, remap_owner=remap_owner)
 
-    _apply_owner_and_mode(dest, entry, remap_owner=remap_owner)
     log.info("restore_file_done", dest=str(dest))
 
 
-def _apply_owner_and_mode(
-    dest: Path,
-    entry: dict,
+def _apply_meta(
+    src: Path,
+    dst: Path,
     *,
+    can_chown: bool,
     remap_owner: tuple[int, int] | None,
 ) -> None:
-    """Restore uid/gid + mode for dest tree, using manifest entry as source of truth."""
-    owner = entry.get("owner") or {}
-    mode_str = entry.get("mode")
-
-    uid: int | None = None
-    gid: int | None = None
-    if remap_owner is not None:
-        uid, gid = remap_owner
-    else:
-        uid = owner.get("uid") if isinstance(owner.get("uid"), int) else None
-        gid = owner.get("gid") if isinstance(owner.get("gid"), int) else None
-
-    can_chown = (uid is not None and gid is not None and os.geteuid() == 0)
-
+    """Mirror src's uid/gid/mode onto dst. Chown is best-effort (silent skip if not root)."""
+    try:
+        s = src.lstat()
+    except OSError as e:
+        log.warning("restore_stat_failed", path=str(src), error=str(e))
+        return
+    uid, gid = (remap_owner if remap_owner is not None else (s.st_uid, s.st_gid))
     if can_chown:
         try:
-            _chown_recursive(dest, uid, gid)
-            log.debug("restore_owner_set", dest=str(dest), uid=uid, gid=gid)
+            os.lchown(dst, uid, gid)
         except OSError as e:
-            log.warning("restore_chown_failed", dest=str(dest), error=str(e))
-    elif uid is not None and os.geteuid() != 0:
-        log.debug("restore_chown_skipped_not_root", dest=str(dest))
-
-    if mode_str:
+            log.warning("restore_chown_failed", dest=str(dst), error=str(e))
+    # chmod isn't meaningful on symlinks on most systems
+    if not dst.is_symlink():
         try:
-            os.chmod(dest, int(mode_str, 8))
-        except (ValueError, OSError) as e:
-            log.warning("restore_chmod_failed", dest=str(dest), error=str(e))
+            os.chmod(dst, s.st_mode & 0o7777)
+        except OSError as e:
+            log.warning("restore_chmod_failed", dest=str(dst), error=str(e))
 
 
-def _chown_recursive(path: Path, uid: int, gid: int) -> None:
-    os.lchown(path, uid, gid)
-    if path.is_dir() and not path.is_symlink():
-        for child in path.rglob("*"):
+def _copy_tree_preserving_meta(
+    src_root: Path,
+    dst_root: Path,
+    *,
+    can_chown: bool,
+    remap_owner: tuple[int, int] | None,
+) -> None:
+    """Recursively copy src_root → dst_root, mirroring uid/gid/mode of each entry.
+
+    We create directories and copy files ourselves (rather than using
+    shutil.copytree) because copytree doesn't preserve ownership and only
+    runs copy_function on leaves — directories created with default umask.
+    """
+    dst_root.mkdir(parents=True, exist_ok=True)
+    _apply_meta(src_root, dst_root, can_chown=can_chown, remap_owner=remap_owner)
+
+    for src_item in src_root.rglob("*"):
+        rel = src_item.relative_to(src_root)
+        dst_item = dst_root / rel
+
+        if src_item.is_symlink():
+            target = os.readlink(src_item)
             try:
-                os.lchown(child, uid, gid)
+                if dst_item.exists() or dst_item.is_symlink():
+                    dst_item.unlink()
+                os.symlink(target, dst_item)
             except OSError as e:
-                log.warning("restore_chown_failed", path=str(child), error=str(e))
+                log.warning("restore_symlink_failed", path=str(dst_item), error=str(e))
+                continue
+            # chmod on a symlink itself isn't portable; just chown.
+            if can_chown:
+                try:
+                    s = src_item.lstat()
+                    uid, gid = (remap_owner if remap_owner is not None else (s.st_uid, s.st_gid))
+                    os.lchown(dst_item, uid, gid)
+                except OSError as e:
+                    log.warning("restore_chown_failed", dest=str(dst_item), error=str(e))
+        elif src_item.is_dir():
+            dst_item.mkdir(exist_ok=True)
+            _apply_meta(src_item, dst_item, can_chown=can_chown, remap_owner=remap_owner)
+        else:
+            shutil.copy2(src_item, dst_item, follow_symlinks=False)
+            _apply_meta(src_item, dst_item, can_chown=can_chown, remap_owner=remap_owner)
 
 
 # ─── docker compose ───────────────────────────────────────────────────────────

@@ -1,9 +1,9 @@
 <h1 align=center><code>UniGrandBackup</code></h1>
 
 <p align="center">
-  <b>🇬🇧 English</b>
+  <img src="https://flagcdn.com/24x18/gb.png" width="24" height="18" alt="EN">&nbsp;<b>English</b>
   &nbsp;·&nbsp;
-  <a href="./README_RU.md">🇷🇺 Русский</a>
+  <a href="./README_RU.md"><img src="https://flagcdn.com/24x18/ru.png" width="24" height="18" alt="RU">&nbsp;Русский</a>
 </p>
 
 > Universal Docker container for scheduled backups of any number of services on a single Linux host. Files + databases → local rotation of the last N copies + automatic delivery of the freshest archive to a Telegram topic.
